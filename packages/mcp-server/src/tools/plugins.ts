@@ -6,7 +6,6 @@
 
 import type { Tool, TextContent } from "@modelcontextprotocol/sdk/types.js";
 import { getRdpClient } from "../index.js";
-import { RDPClient } from "../rdp/index.js";
 import { existsSync } from "node:fs";
 
 // Tool definitions
@@ -132,7 +131,8 @@ export async function handlePluginReload(
     throw new Error(`Plugin reload failed: ${response.exceptionMessage}`);
   }
 
-  const jsonString = RDPClient.gripToValue(response.result);
+  // Use async method to handle longString grips
+  const jsonString = await client.gripToValueAsync(response.result);
   if (jsonString === undefined || jsonString === null) {
     throw new Error("Plugin reload failed: received undefined result from Zotero");
   }
@@ -200,7 +200,8 @@ export async function handlePluginList(): Promise<TextContent[]> {
     throw new Error(`Failed to list plugins: ${response.exceptionMessage}`);
   }
 
-  const jsonString = RDPClient.gripToValue(response.result);
+  // Use async method to handle longString grips
+  const jsonString = await client.gripToValueAsync(response.result);
   if (jsonString === undefined || jsonString === null) {
     throw new Error("Failed to list plugins: received undefined result from Zotero");
   }
@@ -320,7 +321,8 @@ export async function handlePluginInstall(
     throw new Error(`Plugin installation failed: ${response.exceptionMessage}`);
   }
 
-  const jsonString = RDPClient.gripToValue(response.result);
+  // Use async method to handle longString grips
+  const jsonString = await client.gripToValueAsync(response.result);
   if (jsonString === undefined || jsonString === null) {
     throw new Error("Plugin installation failed: received undefined result from Zotero");
   }

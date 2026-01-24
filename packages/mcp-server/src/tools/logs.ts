@@ -6,7 +6,6 @@
 
 import type { Tool, TextContent } from "@modelcontextprotocol/sdk/types.js";
 import { getRdpClient } from "../index.js";
-import { RDPClient } from "../rdp/index.js";
 
 // Tool definitions
 export const readLogsTool: Tool = {
@@ -198,7 +197,8 @@ export async function handleReadLogs(
     throw new Error(`Failed to read logs: ${response.exceptionMessage}`);
   }
 
-  const jsonString = RDPClient.gripToValue(response.result);
+  // Use async method to handle longString grips (large log outputs)
+  const jsonString = await client.gripToValueAsync(response.result);
   if (jsonString === undefined || jsonString === null) {
     throw new Error(
       "Failed to read logs: received undefined result from Zotero.\n\n" +
@@ -314,7 +314,8 @@ export async function handleReadErrors(
     throw new Error(`Failed to read errors: ${response.exceptionMessage}`);
   }
 
-  const jsonString = RDPClient.gripToValue(response.result);
+  // Use async method to handle longString grips (large error outputs)
+  const jsonString = await client.gripToValueAsync(response.result);
   if (jsonString === undefined || jsonString === null) {
     throw new Error(
       "Failed to read errors: received undefined result from Zotero.\n\n" +
@@ -401,7 +402,8 @@ export async function handleClearLogs(): Promise<TextContent[]> {
     throw new Error(`Failed to clear logs: ${response.exceptionMessage}`);
   }
 
-  const resultValue = RDPClient.gripToValue(response.result);
+  // Use async method for consistency with other handlers
+  const resultValue = await client.gripToValueAsync(response.result);
   if (resultValue === undefined || resultValue === null) {
     // Assume success if no result (some Zotero versions don't return anything)
     return [{ type: "text", text: "Logs and error console cleared" }];
@@ -504,7 +506,8 @@ export async function handleWatchLogs(
     throw new Error(`Watch logs failed: ${response.exceptionMessage}`);
   }
 
-  const jsonString = RDPClient.gripToValue(response.result);
+  // Use async method to handle longString grips (large log outputs)
+  const jsonString = await client.gripToValueAsync(response.result);
   if (jsonString === undefined || jsonString === null) {
     throw new Error(
       "Watch logs failed: received undefined result from Zotero.\n\n" +

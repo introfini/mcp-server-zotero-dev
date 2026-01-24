@@ -6,7 +6,6 @@
 
 import type { Tool, TextContent } from "@modelcontextprotocol/sdk/types.js";
 import { getRdpClient } from "../index.js";
-import { RDPClient } from "../rdp/index.js";
 
 // Tool definitions
 export const dbQueryTool: Tool = {
@@ -143,7 +142,19 @@ async function executeViaZotero(
     throw new Error(`Query failed: ${response.exceptionMessage}`);
   }
 
-  const result = RDPClient.gripToValue(response.result) as {
+  // Use async method to handle longString grips (large query results)
+  const resultValue = await client.gripToValueAsync(response.result);
+  if (resultValue === undefined || resultValue === null) {
+    throw new Error(
+      "Query failed: received undefined result from Zotero.\n\n" +
+        "Troubleshooting:\n" +
+        "1. Verify Zotero is running and connected (use zotero_ping)\n" +
+        "2. Check if the query syntax is valid\n" +
+        "3. If the issue persists, restart Zotero and reconnect"
+    );
+  }
+
+  const result = resultValue as {
     rows?: unknown[];
     columns?: string[];
     total?: number;
@@ -235,7 +246,13 @@ export async function handleDbSchema(
       throw new Error(`Schema query failed: ${response.exceptionMessage}`);
     }
 
-    const result = RDPClient.gripToValue(response.result) as {
+    // Use async method to handle longString grips
+    const resultValue = await client.gripToValueAsync(response.result);
+    if (resultValue === undefined || resultValue === null) {
+      throw new Error("Schema query failed: received undefined result from Zotero");
+    }
+
+    const result = resultValue as {
       table?: string;
       columns?: Array<{
         name: string;
@@ -295,13 +312,17 @@ export async function handleDbSchema(
     throw new Error(`Failed to list tables: ${response.exceptionMessage}`);
   }
 
-  const result = RDPClient.gripToValue(response.result);
-
-  if (typeof result === "object" && result !== null && "error" in result) {
-    throw new Error((result as { error: string }).error);
+  // Use async method to handle longString grips
+  const resultValue = await client.gripToValueAsync(response.result);
+  if (resultValue === undefined || resultValue === null) {
+    throw new Error("Failed to list tables: received undefined result from Zotero");
   }
 
-  const tables = result as Array<{ name: string; rowCount: number }>;
+  if (typeof resultValue === "object" && resultValue !== null && "error" in resultValue) {
+    throw new Error((resultValue as { error: string }).error);
+  }
+
+  const tables = resultValue as Array<{ name: string; rowCount: number }>;
 
   const lines = [`Database tables (${tables.length}):\n`];
 
@@ -375,7 +396,13 @@ export async function handleDbStats(): Promise<TextContent[]> {
     throw new Error(`Failed to get stats: ${response.exceptionMessage}`);
   }
 
-  const stats = RDPClient.gripToValue(response.result) as {
+  // Use async method to handle longString grips
+  const statsValue = await client.gripToValueAsync(response.result);
+  if (statsValue === undefined || statsValue === null) {
+    throw new Error("Failed to get stats: received undefined result from Zotero");
+  }
+
+  const stats = statsValue as {
     items?: number;
     attachments?: number;
     collections?: number;

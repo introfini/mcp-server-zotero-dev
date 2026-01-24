@@ -153,19 +153,19 @@ async function handlePing(): Promise<TextContent[]> {
 
     // Execute JS to get Zotero version
     const versionResult = await client.evaluateJS("Zotero.version");
-    const version = RDPClient.gripToValue(versionResult.result);
+    const version = await client.gripToValueAsync(versionResult.result);
 
     // Get app name
     const appResult = await client.evaluateJS("Zotero.appName");
-    const appName = RDPClient.gripToValue(appResult.result);
+    const appName = await client.gripToValueAsync(appResult.result);
 
     // Get platform
     const platformResult = await client.evaluateJS("Zotero.platformMajorVersion");
-    const platformVersion = RDPClient.gripToValue(platformResult.result);
+    const platformVersion = await client.gripToValueAsync(platformResult.result);
 
     // Get data directory
     const dataDirResult = await client.evaluateJS("Zotero.DataDirectory.dir");
-    const dataDir = RDPClient.gripToValue(dataDirResult.result);
+    const dataDir = await client.gripToValueAsync(dataDirResult.result);
 
     return [
       {

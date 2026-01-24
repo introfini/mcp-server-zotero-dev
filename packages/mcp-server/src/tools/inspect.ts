@@ -6,7 +6,6 @@
 
 import type { Tool, TextContent } from "@modelcontextprotocol/sdk/types.js";
 import { getRdpClient } from "../index.js";
-import { RDPClient } from "../rdp/index.js";
 
 // Tool definitions
 export const inspectElementTool: Tool = {
@@ -170,7 +169,8 @@ export async function handleInspectElement(
     throw new Error(`Inspection failed: ${response.exceptionMessage}`);
   }
 
-  const jsonString = RDPClient.gripToValue(response.result);
+  // Use async method to handle longString grips
+  const jsonString = await client.gripToValueAsync(response.result);
   if (jsonString === undefined || jsonString === null) {
     throw new Error("Inspection failed: received undefined result from Zotero");
   }
@@ -291,7 +291,8 @@ export async function handleGetDomTree(
     throw new Error(`Failed to get DOM tree: ${response.exceptionMessage}`);
   }
 
-  const jsonString = RDPClient.gripToValue(response.result);
+  // Use async method to handle longString grips
+  const jsonString = await client.gripToValueAsync(response.result);
   if (jsonString === undefined || jsonString === null) {
     throw new Error("Failed to get DOM tree: received undefined result from Zotero");
   }
@@ -395,7 +396,8 @@ export async function handleGetStyles(
     throw new Error(`Failed to get styles: ${response.exceptionMessage}`);
   }
 
-  const jsonString = RDPClient.gripToValue(response.result);
+  // Use async method to handle longString grips
+  const jsonString = await client.gripToValueAsync(response.result);
   if (jsonString === undefined || jsonString === null) {
     throw new Error("Failed to get styles: received undefined result from Zotero");
   }
@@ -461,7 +463,8 @@ export async function handleListWindows(): Promise<TextContent[]> {
     throw new Error(`Failed to list windows: ${response.exceptionMessage}`);
   }
 
-  const jsonString = RDPClient.gripToValue(response.result);
+  // Use async method to handle longString grips
+  const jsonString = await client.gripToValueAsync(response.result);
   if (jsonString === undefined || jsonString === null) {
     throw new Error("Failed to list windows: received undefined result from Zotero");
   }

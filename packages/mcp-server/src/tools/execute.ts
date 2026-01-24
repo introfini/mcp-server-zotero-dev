@@ -6,7 +6,6 @@
 
 import type { Tool, TextContent } from "@modelcontextprotocol/sdk/types.js";
 import { getRdpClient } from "../index.js";
-import { RDPClient } from "../rdp/index.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // IIFE Wrapping Helpers
@@ -218,7 +217,8 @@ export async function handleExecuteJs(
     ];
   }
 
-  const result = RDPClient.gripToValue(response.result);
+  // Use async method to handle longString grips
+  const result = await client.gripToValueAsync(response.result);
   let resultText: string;
 
   if (result === undefined) {
@@ -294,7 +294,8 @@ export async function handleGetPref(
     throw new Error(`Failed to get preference: ${response.exceptionMessage}`);
   }
 
-  const value = RDPClient.gripToValue(response.result);
+  // Use async method to handle longString grips
+  const value = await client.gripToValueAsync(response.result);
 
   return [
     {

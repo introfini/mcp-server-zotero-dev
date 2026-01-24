@@ -33,11 +33,13 @@ import {
   setPrefTool,
   searchPrefsTool,
   inspectObjectTool,
+  openPreferencesTool,
   handleExecuteJs,
   handleGetPref,
   handleSetPref,
   handleSearchPrefs,
   handleInspectObject,
+  handleOpenPreferences,
 } from "./tools/execute.js";
 import { screenshotTool, handleScreenshot } from "./tools/screenshot.js";
 import {
@@ -205,6 +207,7 @@ const allTools: Tool[] = [
   setPrefTool,
   searchPrefsTool,
   inspectObjectTool,
+  openPreferencesTool,
   screenshotTool,
   inspectElementTool,
   getDomTreeTool,
@@ -268,6 +271,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         break;
       case "zotero_inspect_object":
         content = await handleInspectObject(args as Record<string, unknown>);
+        break;
+      case "zotero_open_preferences":
+        content = await handleOpenPreferences(args as Record<string, unknown>);
         break;
 
       // Screenshot

@@ -108,7 +108,8 @@ export const executeJsTool: Tool = {
     "Has full access to Zotero APIs (Zotero.*, ZoteroPane, etc.). " +
     "Use for testing code snippets, inspecting state, or performing actions. " +
     "Code with top-level 'return' statements is auto-wrapped in an IIFE. " +
-    "Tip: For complex objects, use JSON.stringify(obj) to get full data.",
+    "Tip: For complex objects, use JSON.stringify(obj) to get full data. " +
+    "IMPORTANT: Before calling unknown APIs, use zotero_inspect_object to discover available methods - don't guess API names.",
   inputSchema: {
     type: "object",
     properties: {
@@ -209,10 +210,25 @@ export async function handleExecuteJs(
       }
     }
 
+    // Add contextual hints based on error type
+    let hint = "";
+    if (error.includes("is not a function")) {
+      hint =
+        "\n\n💡 Tip: Use zotero_inspect_object to discover available methods.\n" +
+        'Example: zotero_inspect_object(path: "Zotero.Prefs", filter: "methods")';
+    } else if (
+      error.includes("is undefined") ||
+      error.includes("is not defined")
+    ) {
+      hint =
+        "\n\n💡 Tip: Use zotero_inspect_object to explore the API.\n" +
+        'Example: zotero_inspect_object(path: "Zotero", pattern: "your_keyword")';
+    }
+
     return [
       {
         type: "text",
-        text: `Error executing JavaScript:\n\n${errorDetail}`,
+        text: `Error executing JavaScript:\n\n${errorDetail}${hint}`,
       },
     ];
   }
@@ -798,4 +814,91 @@ export async function handleInspectObject(
   }
 
   return [{ type: "text", text: lines.join("\n") }];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tool: zotero_open_preferences
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const openPreferencesTool: Tool = {
+  name: "zotero_open_preferences",
+  description:
+    "Open Zotero's preferences/settings window. Optionally navigate directly to a specific pane. " +
+    "For built-in panes, use: 'general', 'sync', 'export', 'cite', 'advanced'. " +
+    "For plugin panes, use the plugin ID (e.g., 'zotseek@zotero.org' or just 'zotseek').",
+  inputSchema: {
+    type: "object",
+    properties: {
+      paneId: {
+        type: "string",
+        description:
+          "Optional pane ID to navigate to. Built-in: 'general', 'sync', 'export', 'cite', 'advanced'. " +
+          "For plugins: use the plugin ID (e.g., 'zotseek@zotero.org'). If omitted, opens to the last viewed pane.",
+      },
+    },
+    required: [],
+  },
+};
+
+export async function handleOpenPreferences(
+  args: Record<string, unknown>
+): Promise<TextContent[]> {
+  const paneId = args.paneId as string | undefined;
+
+  const client = await getRdpClient();
+
+  // Build the code to open preferences
+  const code = paneId
+    ? `Zotero.Utilities.Internal.openPreferences(${JSON.stringify(paneId)}); return 'Preferences opened to: ${paneId}';`
+    : `Zotero.Utilities.Internal.openPreferences(); return 'Preferences window opened';`;
+
+  const response = await client.evaluateJS(code);
+
+  if (response.exception || response.exceptionMessage) {
+    const error = response.exceptionMessage || "Unknown error";
+    return [
+      {
+        type: "text",
+        text: `Error opening preferences: ${error}`,
+      },
+    ];
+  }
+
+  const result = await client.gripToValueAsync(response.result);
+
+  // Also list available panes for reference
+  const panesCode = `
+    JSON.stringify({
+      builtIn: Zotero.PreferencePanes.builtInPanes
+        .filter(p => !p.id.includes('subpane'))
+        .map(p => p.id.replace('zotero-prefpane-', '')),
+      plugins: Zotero.PreferencePanes.pluginPanes.map(p => p.pluginID)
+    })
+  `;
+
+  const panesResponse = await client.evaluateJS(panesCode);
+  let panesInfo = "";
+
+  if (!panesResponse.exception) {
+    try {
+      const panesJson = await client.gripToValueAsync(panesResponse.result);
+      const panes = JSON.parse(String(panesJson)) as {
+        builtIn: string[];
+        plugins: string[];
+      };
+      panesInfo =
+        "\n\nAvailable panes:\n" +
+        `  Built-in: ${panes.builtIn.join(", ")}\n` +
+        `  Plugins: ${panes.plugins.join(", ")}`;
+    } catch {
+      // Ignore parsing errors
+    }
+  }
+
+  return [
+    {
+      type: "text",
+      text: `${result}${panesInfo}`,
+    },
+  ];
 }

@@ -17,12 +17,15 @@ An MCP (Model Context Protocol) server that enables AI assistants like Claude, C
 - 🎨 **zotero_get_styles** - Get computed CSS styles for elements
 - 🪟 **zotero_list_windows** - List all open Zotero windows
 
-#### JavaScript Execution (5 tools)
+#### JavaScript Execution (6 tools)
 - 💻 **zotero_execute_js** - Execute JavaScript in Zotero's privileged context
   - Auto-wraps code with top-level `return` statements in IIFE
 - 🔎 **zotero_inspect_object** - Explore Zotero APIs interactively
   - List methods and properties of any object (e.g., `Zotero.Items`)
   - Supports depth control and filtering (own/inherited/all)
+- ⚙️ **zotero_open_preferences** - Open Zotero's settings window
+  - Navigate directly to built-in panes: 'general', 'sync', 'export', 'cite', 'advanced'
+  - Navigate to plugin panes by plugin ID (e.g., 'zotseek@zotero.org')
 - 🔧 **zotero_search_prefs** - Search/discover preferences by pattern
 - 📖 **zotero_get_pref** - Get a preference value
 - ✏️ **zotero_set_pref** - Set a preference value

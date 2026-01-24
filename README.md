@@ -123,7 +123,7 @@ That's it! No special launch flags, no configuration. 🎉
 
 ---
 
-## 🧰 Available Tools (25 total)
+## 🧰 Available Tools (26 total)
 
 <details>
 <summary><strong>UI Inspection</strong> — Screenshots, DOM, styles</summary>
@@ -147,6 +147,7 @@ That's it! No special launch flags, no configuration. 🎉
 |------|-------------|
 | `zotero_execute_js` | Execute JavaScript in Zotero's privileged context. Auto-wraps code with top-level `return` statements in IIFE. |
 | `zotero_inspect_object` | Explore Zotero APIs - list methods and properties of any object (e.g., `Zotero.Items`) |
+| `zotero_open_preferences` | Open Zotero's settings window, optionally to a specific pane (built-in or plugin) |
 | `zotero_search_prefs` | Search/discover preferences by pattern (e.g., find all prefs containing "debug") |
 | `zotero_get_pref` | Get a preference value |
 | `zotero_set_pref` | Set a preference value |

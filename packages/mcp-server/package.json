@@ -1,6 +1,6 @@
 {
   "name": "@introfini/mcp-server-zotero-dev",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "MCP server for Zotero plugin development - enables AI assistants to build, test, and debug Zotero plugins",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

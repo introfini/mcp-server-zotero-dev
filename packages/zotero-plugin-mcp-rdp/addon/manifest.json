@@ -1,0 +1,20 @@
+{
+  "manifest_version": 2,
+  "name": "MCP Bridge for Zotero",
+  "version": "1.0.0",
+  "description": "Enables Remote Debugging Protocol for AI-assisted Zotero plugin development",
+  "homepage_url": "https://github.com/introfini/mcp-server-zotero-dev",
+  "author": "introfini",
+  "icons": {
+    "48": "content/icons/icon-48.svg",
+    "96": "content/icons/icon-96.svg"
+  },
+  "applications": {
+    "zotero": {
+      "id": "mcp-rdp@zotero.org",
+      "update_url": "https://raw.githubusercontent.com/introfini/mcp-server-zotero-dev/main/update.json",
+      "strict_min_version": "6.999",
+      "strict_max_version": "8.*"
+    }
+  }
+}

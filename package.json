@@ -1,0 +1,28 @@
+{
+  "name": "mcp-server-zotero-dev-monorepo",
+  "version": "0.0.0",
+  "private": true,
+  "description": "MCP server for Zotero plugin development",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build -ws",
+    "build:plugin": "npm run build -w zotero-plugin-mcp-rdp",
+    "build:server": "npm run build -w @introfini/mcp-server-zotero-dev",
+    "dev": "npm run dev -w @introfini/mcp-server-zotero-dev",
+    "test": "npm run test -w @introfini/mcp-server-zotero-dev",
+    "lint": "npm run lint -ws --if-present",
+    "typecheck": "npm run typecheck -ws --if-present",
+    "clean": "npm run clean -ws --if-present"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "author": "",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/introfini/mcp-server-zotero-dev"
+  }
+}

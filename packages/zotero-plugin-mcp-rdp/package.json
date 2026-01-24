@@ -1,0 +1,27 @@
+{
+  "name": "zotero-plugin-mcp-rdp",
+  "version": "1.0.0",
+  "description": "Tiny Zotero plugin that enables Remote Debugging Protocol for AI-assisted development",
+  "main": "src/index.ts",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "build:dev": "node scripts/build.mjs --dev",
+    "clean": "rm -rf build"
+  },
+  "keywords": [
+    "zotero",
+    "plugin",
+    "mcp",
+    "rdp",
+    "devtools"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "adm-zip": "^0.5.10",
+    "esbuild": "^0.20.0"
+  },
+  "files": [
+    "build"
+  ]
+}

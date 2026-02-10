@@ -71,7 +71,7 @@ export class RDPClient extends EventEmitter {
   private state: ConnectionState;
   private pendingRequests: Map<string, PendingRequest> = new Map();
   private messageIdCounter = 0;
-  private buffer = "";
+  private buffer = Buffer.alloc(0);
   private reconnectAttempts = 0;
 
   // Connection health tracking
@@ -136,13 +136,14 @@ export class RDPClient extends EventEmitter {
         }
       );
 
-      this.socket.setEncoding("utf8");
+      // Do NOT call setEncoding('utf8') — the RDP protocol uses byte-length
+      // prefixes, so we must work with raw Buffers for correct framing.
 
       // Enable TCP keepalive to detect dead connections faster
       // This is crucial for detecting when Zotero closes unexpectedly
       this.socket.setKeepAlive(true, 10000); // 10 second keepalive probe
 
-      this.socket.on("data", (data: string) => this.handleData(data));
+      this.socket.on("data", (data: Buffer) => this.handleData(data));
       this.socket.on("error", (err) => {
         this.removeListener("message", handleIntro);
         this.handleError(err, reject);
@@ -746,29 +747,38 @@ export class RDPClient extends EventEmitter {
 
   /**
    * Handle incoming data from socket
+   *
+   * Data arrives as raw Buffers (no setEncoding) because the RDP protocol
+   * uses byte-length prefixes. Using setEncoding('utf8') would convert to
+   * a JS string where .length counts characters, not bytes — breaking
+   * framing for any message containing multi-byte UTF-8 (e.g., emoji).
    */
-  private handleData(data: string): void {
-    this.buffer += data;
+  private handleData(data: Buffer): void {
+    this.buffer = Buffer.concat([this.buffer, data]);
     this.processBuffer();
   }
 
   /**
    * Process buffered data to extract complete messages
+   *
+   * RDP packet format: <byte_length>:<json_utf8>
+   * The length prefix is the byte count of the JSON payload.
+   * We work entirely with Buffers to ensure correct byte-based framing.
    */
   private processBuffer(): void {
     while (true) {
-      // Find the length prefix
-      const colonIndex = this.buffer.indexOf(":");
+      // Find the colon separator for the length prefix
+      const colonIndex = this.buffer.indexOf(0x3a); // 0x3a = ':'
       if (colonIndex === -1) {
         break;
       }
 
-      const lengthStr = this.buffer.slice(0, colonIndex);
+      const lengthStr = this.buffer.subarray(0, colonIndex).toString("ascii");
       const length = parseInt(lengthStr, 10);
 
       if (isNaN(length)) {
         // Invalid packet, skip this byte
-        this.buffer = this.buffer.slice(1);
+        this.buffer = this.buffer.subarray(1);
         continue;
       }
 
@@ -780,8 +790,9 @@ export class RDPClient extends EventEmitter {
         break;
       }
 
-      const messageStr = this.buffer.slice(messageStart, messageEnd);
-      this.buffer = this.buffer.slice(messageEnd);
+      // Decode the JSON payload from UTF-8 bytes to a JS string
+      const messageStr = this.buffer.subarray(messageStart, messageEnd).toString("utf8");
+      this.buffer = this.buffer.subarray(messageEnd);
 
       try {
         const message = JSON.parse(messageStr) as RDPResponse;

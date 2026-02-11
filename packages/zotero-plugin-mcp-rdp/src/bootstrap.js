@@ -153,6 +153,17 @@ async function startup({ id, version, resourceURI, rootURI }, reason) {
 
   log("Starting RDP server on port " + rdpPort);
 
+  // Ensure DevTools preferences are set (required for RDP to work)
+  try {
+    var start = "devtools.debugger.";
+    Services.prefs.setBoolPref(start + "remote-enabled", true);
+    Services.prefs.setBoolPref(start + "prompt-connection", false);
+    Services.prefs.setBoolPref("devtools.chrome.enabled", true);
+    log("DevTools preferences configured");
+  } catch (e) {
+    log("Warning: Could not set DevTools preferences: " + e);
+  }
+
   try {
     // Initialize DevTools stack
     if (!initDevToolsStack()) {

@@ -2,6 +2,16 @@
 
 All notable changes to MCP Server Zotero Dev will be documented in this file.
 
+## [Plugin 1.0.1] - 2026-04-11
+
+### Fixed
+- **Zotero 9 compatibility** — bumped `strict_max_version` from `8.*` to `9.*` in the plugin manifest so the MCP Bridge XPI loads on Zotero 9.0. Without this fix, Zotero 9 refuses to activate the plugin, leaving the RDP port (6100) closed and disconnecting MCP clients (Claude Code, Cursor, Windsurf) from Zotero.
+
+### Technical
+- `packages/zotero-plugin-mcp-rdp/package.json` version bumped to 1.0.1 (build script auto-syncs this into the XPI manifest).
+- `update.json` regenerated with the v1.0.1 download URL and an explicit `strict_max_version: "9.*"` in the applications block.
+- The MCP server half (`@introfini/mcp-server-zotero-dev`) is unchanged — this release only ships a new Zotero plugin XPI.
+
 ## [1.0.0] - 2025-01-24
 
 ### Initial Release 🎉

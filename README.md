@@ -15,7 +15,7 @@
 
 ---
 
-A **Model Context Protocol (MCP) server** that enables AI assistants like Claude, Cursor, and Windsurf to build, test, and debug [Zotero](https://www.zotero.org) 7/8 plugins. Screenshots, DOM state, debug logs, and JavaScript execution give the AI rich context to understand what's happening—and tools to help you fix it.
+A **Model Context Protocol (MCP) server** that enables AI assistants like Claude, Cursor, and Windsurf to build, test, and debug [Zotero](https://www.zotero.org) 7, 8, and 9 plugins. Screenshots, DOM state, debug logs, and JavaScript execution give the AI rich context to understand what's happening—and tools to help you fix it.
 
 ## ✨ Features
 
@@ -35,7 +35,7 @@ A **Model Context Protocol (MCP) server** that enables AI assistants like Claude
 ### Prerequisites
 
 - **Node.js** 20+ and npm
-- **Zotero 7+** — Works on all Zotero 7 and 8 builds (release, beta, dev)
+- **Zotero 7+** — Works on all Zotero 7, 8, and 9 builds (release, beta, dev)
 - For plugin development: [zotero-plugin-scaffold](https://github.com/windingwind/zotero-plugin-scaffold)
 
 ### 1. Install MCP Server

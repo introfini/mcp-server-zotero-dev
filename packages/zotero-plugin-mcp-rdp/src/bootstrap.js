@@ -86,9 +86,66 @@ async function openListener() {
   }
 }
 
-// Simple periodic reopener - tries to open listener every few seconds
-// If listener is already running, the open() will fail harmlessly (port in use)
+// Periodic NON-DESTRUCTIVE health check.
+//
+// The previous implementation called openListener() every 2 seconds, and
+// openListener() unconditionally CLOSES the live listener before reopening -
+// the "fails harmlessly (port in use)" assumption never held because the
+// close frees the port first. Measured effect: the port refused most
+// incoming connections (35/40 in a 10s probe run) and established
+// connections died within a single cycle, so any RDP request in flight lost
+// its reply (MCP clients saw "undefined" results / transient disconnects).
+//
+// Instead, probe the port as a CLIENT: if a TCP connect to 127.0.0.1:port
+// succeeds, the listener is healthy and is left strictly alone; only when
+// the connect fails (refused / timed out) is the listener actually reopened.
+// (A bind-probe would be unreliable: Mozilla server sockets set SO_REUSEADDR,
+// and on Windows that lets a second bind steal a live port.)
 var healthCheckInterval = null;
+
+function probeConnect() {
+  return new Promise(function (resolve) {
+    var done = false;
+    var finish = function (alive) {
+      if (done) return;
+      done = true;
+      resolve(alive);
+    };
+    try {
+      var sts = Components.classes["@mozilla.org/network/socket-transport-service;1"]
+        .getService(Components.interfaces.nsISocketTransportService);
+      var transport = sts.createTransport([], "127.0.0.1", rdpPort, null, null);
+      var timer = setTimeout(function () {
+        try { transport.close(Components.results.NS_ERROR_ABORT); } catch (e) {}
+        finish(false);
+      }, 1500);
+      transport.setEventSink({
+        onTransportStatus: function (t, status) {
+          if (status === Components.interfaces.nsISocketTransport.STATUS_CONNECTED_TO) {
+            clearTimeout(timer);
+            try { transport.close(Components.results.NS_OK); } catch (e) {}
+            finish(true);
+          }
+        }
+      }, Services.tm.currentThread);
+      // Opening a stream kicks off the actual connection attempt.
+      transport.openOutputStream(0, 0, 0);
+    } catch (e) {
+      finish(false);
+    }
+  });
+}
+
+async function checkListener() {
+  if (isShuttingDown) return;
+  if (rdpListener) {
+    var alive = await probeConnect();
+    if (alive || isShuttingDown) return;   // healthy - do NOT touch the listener
+    log("Health check: port " + rdpPort + " not answering - reopening listener");
+  }
+  var ok = await openListener();
+  if (ok) log("Listener (re)opened by health check");
+}
 
 function startHealthCheck() {
   if (healthCheckInterval) return;
@@ -98,18 +155,10 @@ function startHealthCheck() {
       stopHealthCheck();
       return;
     }
+    checkListener().catch(function () {});
+  }, 10000);  // Probe every 10 seconds (read-only when healthy)
 
-    // Simply try to reopen - openListener handles errors gracefully
-    openListener().then(function(success) {
-      if (success) {
-        log("Listener reopened by health check");
-      }
-    }).catch(function() {
-      // Silently ignore - might be already listening
-    });
-  }, 2000);  // Try every 2 seconds
-
-  log("Health check started");
+  log("Health check started (non-destructive connect-probe, 10s)");
 }
 
 function stopHealthCheck() {

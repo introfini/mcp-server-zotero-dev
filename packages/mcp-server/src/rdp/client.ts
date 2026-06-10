@@ -597,13 +597,23 @@ export class RDPClient extends EventEmitter {
         return this.evaluateJS(code, retryCount + 1);
       }
 
-      // Connection errors: full reconnect needed
-      if (isConnectionError && retryCount < maxRetries) {
-        // Exponential backoff based on consecutive failures
-        const backoffMs = Math.min(1000 * Math.pow(2, this.consecutiveFailures - 1), 5000);
-        await this.delay(backoffMs);
-        await this.reconnect();
-        return this.evaluateJS(code, retryCount + 1);
+      // Connection errors: reconnect so the NEXT call works, but DO NOT
+      // resend this code. A connection drop loses the REPLY, not necessarily
+      // the request - the eval may have already executed in Zotero, and a
+      // blind resend runs its side effects twice (e.g. double plugin
+      // installs, duplicated mutations). Surface an honest error and let the
+      // caller verify before retrying.
+      if (isConnectionError) {
+        try {
+          await this.reconnect();
+        } catch {
+          // Reconnect failure is secondary; report the original drop.
+        }
+        throw new Error(
+          "Connection lost while waiting for the evaluateJS result; " +
+            "the code may or may not have executed in Zotero. " +
+            "Verify its effect before re-running (the connection has been re-established)."
+        );
       }
 
       throw error;
@@ -910,6 +920,15 @@ export class RDPClient extends EventEmitter {
     const wasConnected = this.state.connected;
     this.state.connected = false;
     this.socket = null;
+
+    // Fail pending requests immediately - their replies can never arrive on
+    // a closed socket. They previously sat out the full request timeout
+    // (30s by default) before erroring.
+    this.pendingRequests.forEach((req) => {
+      clearTimeout(req.timeout);
+      req.reject(new Error("Connection closed before a reply arrived"));
+    });
+    this.pendingRequests.clear();
 
     if (wasConnected) {
       this.emit("disconnected");

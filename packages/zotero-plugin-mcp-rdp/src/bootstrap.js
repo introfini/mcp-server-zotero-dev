@@ -106,30 +106,43 @@ var healthCheckInterval = null;
 function probeConnect() {
   return new Promise(function (resolve) {
     var done = false;
+    var transport = null;
     var finish = function (alive) {
       if (done) return;
       done = true;
+      try { if (transport) transport.close(Components.results.NS_OK); } catch (e) {}
       resolve(alive);
     };
     try {
       var sts = Components.classes["@mozilla.org/network/socket-transport-service;1"]
         .getService(Components.interfaces.nsISocketTransportService);
-      var transport = sts.createTransport([], "127.0.0.1", rdpPort, null, null);
-      var timer = setTimeout(function () {
-        try { transport.close(Components.results.NS_ERROR_ABORT); } catch (e) {}
-        finish(false);
-      }, 1500);
-      transport.setEventSink({
-        onTransportStatus: function (t, status) {
-          if (status === Components.interfaces.nsISocketTransport.STATUS_CONNECTED_TO) {
-            clearTimeout(timer);
-            try { transport.close(Components.results.NS_OK); } catch (e) {}
-            finish(true);
-          }
+      transport = sts.createTransport([], "127.0.0.1", rdpPort, null, null);
+      var timer = setTimeout(function () { finish(false); }, 1500);
+      // IMPORTANT: wait for the server's RDP intro packet and only close
+      // AFTER reading it. Closing at TCP-connect time aborts the connection
+      // mid-handshake - the DevTools server's intro write then hits a dying
+      // socket and the LISTENER itself can self-close, i.e. the probe kills
+      // the very listener it is checking (observed as a 10-20s flap cycle).
+      transport.openOutputStream(0, 0, 0);   // kicks off the connect
+      var input = transport.openInputStream(0, 0, 0);
+      input.asyncWait({
+        onInputStreamReady: function (s) {
+          clearTimeout(timer);
+          var alive = false;
+          try {
+            var n = s.available();           // throws if closed/refused
+            if (n > 0) {
+              alive = true;
+              // Drain the intro bytes so the server's write completes.
+              var sis = Components.classes["@mozilla.org/scriptableinputstream;1"]
+                .createInstance(Components.interfaces.nsIScriptableInputStream);
+              sis.init(s);
+              sis.read(n);
+            }
+          } catch (e) { alive = false; }
+          finish(alive);
         }
-      }, Services.tm.currentThread);
-      // Opening a stream kicks off the actual connection attempt.
-      transport.openOutputStream(0, 0, 0);
+      }, 0, 0, Services.tm.currentThread);
     } catch (e) {
       finish(false);
     }

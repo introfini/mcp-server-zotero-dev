@@ -263,3 +263,9 @@ function shutdown({ id, version, resourceURI, rootURI }, reason) {
 function uninstall(data, reason) {
   log("uninstall() called");
 }
+
+// No-op window hooks. Zotero 7+ calls these on every plugin and logs a
+// "Plugin ... is missing bootstrap method" warning per window when absent.
+// The RDP server is window-independent, so there is nothing to do here.
+function onMainWindowLoad() {}
+function onMainWindowUnload() {}

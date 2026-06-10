@@ -412,8 +412,13 @@ export class RDPClient extends EventEmitter {
       });
 
       // RDP packet format: <length>:<json>
+      // The length prefix is the UTF-8 BYTE length, not the JS character
+      // count: json.length undercounts any non-ASCII payload (e.g. emoji or
+      // accented text inside code strings), which corrupts the stream and
+      // wedges the connection. The receive path (processBuffer) already does
+      // byte-based framing for the same reason.
       const json = JSON.stringify(message);
-      const packet = `${json.length}:${json}`;
+      const packet = `${Buffer.byteLength(json, "utf8")}:${json}`;
 
       this.socket!.write(packet, (err) => {
         if (err) {

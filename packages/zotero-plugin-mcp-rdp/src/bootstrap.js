@@ -245,18 +245,27 @@ async function startup({ id, version, resourceURI, rootURI }, reason) {
     // Open the listener
     var success = await openListener();
     if (success) {
-      rdpStarted = true;
-      startHealthCheck();
       log("SUCCESS - Server listening on port " + rdpPort);
     } else {
       log("Failed to open listener");
     }
+    // Start the health check UNCONDITIONALLY. The non-destructive check
+    // reopens the listener whenever the port stops answering, so a failed
+    // open at startup (e.g. the port was briefly busy by another process or
+    // a not-yet-released previous instance) self-heals on a later tick
+    // instead of leaving the bridge permanently dead until a manual plugin
+    // reload or Zotero restart. Previously this ran only inside the success
+    // branch, so a failed boot-open could never recover.
+    rdpStarted = true;
+    startHealthCheck();
   } catch (e) {
     log("ERROR: " + e);
     if (e.stack) log("Stack: " + e.stack);
     try {
       Zotero.logError(e);
     } catch (e2) {}
+    // Even after an unexpected startup error, keep trying to come up.
+    try { rdpStarted = true; startHealthCheck(); } catch (e3) {}
   }
 }
 

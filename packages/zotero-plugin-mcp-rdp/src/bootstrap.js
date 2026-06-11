@@ -44,8 +44,17 @@ function initDevToolsStack() {
     }
     DevToolsServer.registerAllActors();
     DevToolsServer.allowChromeProcess = true;
+    // CRITICAL: without keepAlive, the DevToolsServer destroys itself - and
+    // its listeners - whenever the LAST client connection closes. With a
+    // non-destructive health check this surfaces as the listener dying
+    // moments after every probe disconnect (when no MCP client holds a
+    // long-lived connection); the original 2s reopen loop was accidentally
+    // masking it by perpetually recreating the listener. Verified by
+    // holding an external connection open: the kill cycle stopped for
+    // exactly as long as the connection was held.
+    DevToolsServer.keepAlive = true;
 
-    log("DevTools stack initialized");
+    log("DevTools stack initialized (keepAlive=true)");
     return true;
   } catch (e) {
     log("Error initializing DevTools stack: " + e);

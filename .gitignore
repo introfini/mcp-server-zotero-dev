@@ -43,3 +43,7 @@ pnpm-lock.yaml
 # AI assistant context
 CLAUDE.md
 .claude/
+
+# MCP Registry publisher credentials and binary
+packages/mcp-server/.mcpregistry_*
+packages/mcp-server/mcp-publisher

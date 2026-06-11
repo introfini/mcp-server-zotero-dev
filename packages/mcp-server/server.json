@@ -1,0 +1,37 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.introfini/mcp-server-zotero-dev",
+  "description": "MCP server enabling AI assistants to build, test, and debug Zotero plugins",
+  "repository": {
+    "url": "https://github.com/introfini/mcp-server-zotero-dev",
+    "source": "github",
+    "subfolder": "packages/mcp-server"
+  },
+  "version": "1.0.7",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "@introfini/mcp-server-zotero-dev",
+      "version": "1.0.7",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "description": "RDP port for Zotero connection",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false,
+          "name": "ZOTERO_RDP_PORT"
+        },
+        {
+          "description": "RDP host for Zotero connection",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false,
+          "name": "ZOTERO_RDP_HOST"
+        }
+      ]
+    }
+  ]
+}

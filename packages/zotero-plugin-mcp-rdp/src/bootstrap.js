@@ -44,8 +44,17 @@ function initDevToolsStack() {
     }
     DevToolsServer.registerAllActors();
     DevToolsServer.allowChromeProcess = true;
+    // CRITICAL: without keepAlive, the DevToolsServer destroys itself - and
+    // its listeners - whenever the LAST client connection closes. With a
+    // non-destructive health check this surfaces as the listener dying
+    // moments after every probe disconnect (when no MCP client holds a
+    // long-lived connection); the original 2s reopen loop was accidentally
+    // masking it by perpetually recreating the listener. Verified by
+    // holding an external connection open: the kill cycle stopped for
+    // exactly as long as the connection was held.
+    DevToolsServer.keepAlive = true;
 
-    log("DevTools stack initialized");
+    log("DevTools stack initialized (keepAlive=true)");
     return true;
   } catch (e) {
     log("Error initializing DevTools stack: " + e);
@@ -86,9 +95,79 @@ async function openListener() {
   }
 }
 
-// Simple periodic reopener - tries to open listener every few seconds
-// If listener is already running, the open() will fail harmlessly (port in use)
+// Periodic NON-DESTRUCTIVE health check.
+//
+// The previous implementation called openListener() every 2 seconds, and
+// openListener() unconditionally CLOSES the live listener before reopening -
+// the "fails harmlessly (port in use)" assumption never held because the
+// close frees the port first. Measured effect: the port refused most
+// incoming connections (35/40 in a 10s probe run) and established
+// connections died within a single cycle, so any RDP request in flight lost
+// its reply (MCP clients saw "undefined" results / transient disconnects).
+//
+// Instead, probe the port as a CLIENT: if a TCP connect to 127.0.0.1:port
+// succeeds, the listener is healthy and is left strictly alone; only when
+// the connect fails (refused / timed out) is the listener actually reopened.
+// (A bind-probe would be unreliable: Mozilla server sockets set SO_REUSEADDR,
+// and on Windows that lets a second bind steal a live port.)
 var healthCheckInterval = null;
+
+function probeConnect() {
+  return new Promise(function (resolve) {
+    var done = false;
+    var transport = null;
+    var finish = function (alive) {
+      if (done) return;
+      done = true;
+      try { if (transport) transport.close(Components.results.NS_OK); } catch (e) {}
+      resolve(alive);
+    };
+    try {
+      var sts = Components.classes["@mozilla.org/network/socket-transport-service;1"]
+        .getService(Components.interfaces.nsISocketTransportService);
+      transport = sts.createTransport([], "127.0.0.1", rdpPort, null, null);
+      var timer = setTimeout(function () { finish(false); }, 1500);
+      // IMPORTANT: wait for the server's RDP intro packet and only close
+      // AFTER reading it. Closing at TCP-connect time aborts the connection
+      // mid-handshake - the DevTools server's intro write then hits a dying
+      // socket and the LISTENER itself can self-close, i.e. the probe kills
+      // the very listener it is checking (observed as a 10-20s flap cycle).
+      transport.openOutputStream(0, 0, 0);   // kicks off the connect
+      var input = transport.openInputStream(0, 0, 0);
+      input.asyncWait({
+        onInputStreamReady: function (s) {
+          clearTimeout(timer);
+          var alive = false;
+          try {
+            var n = s.available();           // throws if closed/refused
+            if (n > 0) {
+              alive = true;
+              // Drain the intro bytes so the server's write completes.
+              var sis = Components.classes["@mozilla.org/scriptableinputstream;1"]
+                .createInstance(Components.interfaces.nsIScriptableInputStream);
+              sis.init(s);
+              sis.read(n);
+            }
+          } catch (e) { alive = false; }
+          finish(alive);
+        }
+      }, 0, 0, Services.tm.currentThread);
+    } catch (e) {
+      finish(false);
+    }
+  });
+}
+
+async function checkListener() {
+  if (isShuttingDown) return;
+  if (rdpListener) {
+    var alive = await probeConnect();
+    if (alive || isShuttingDown) return;   // healthy - do NOT touch the listener
+    log("Health check: port " + rdpPort + " not answering - reopening listener");
+  }
+  var ok = await openListener();
+  if (ok) log("Listener (re)opened by health check");
+}
 
 function startHealthCheck() {
   if (healthCheckInterval) return;
@@ -98,18 +177,10 @@ function startHealthCheck() {
       stopHealthCheck();
       return;
     }
+    checkListener().catch(function () {});
+  }, 10000);  // Probe every 10 seconds (read-only when healthy)
 
-    // Simply try to reopen - openListener handles errors gracefully
-    openListener().then(function(success) {
-      if (success) {
-        log("Listener reopened by health check");
-      }
-    }).catch(function() {
-      // Silently ignore - might be already listening
-    });
-  }, 2000);  // Try every 2 seconds
-
-  log("Health check started");
+  log("Health check started (non-destructive connect-probe, 10s)");
 }
 
 function stopHealthCheck() {
@@ -214,3 +285,9 @@ function shutdown({ id, version, resourceURI, rootURI }, reason) {
 function uninstall(data, reason) {
   log("uninstall() called");
 }
+
+// No-op window hooks. Zotero 7+ calls these on every plugin and logs a
+// "Plugin ... is missing bootstrap method" warning per window when absent.
+// The RDP server is window-independent, so there is nothing to do here.
+function onMainWindowLoad() {}
+function onMainWindowUnload() {}

@@ -609,15 +609,20 @@ export class RDPClient extends EventEmitter {
       // installs, duplicated mutations). Surface an honest error and let the
       // caller verify before retrying.
       if (isConnectionError) {
+        let reconnected = false;
         try {
           await this.reconnect();
+          reconnected = true;
         } catch {
           // Reconnect failure is secondary; report the original drop.
         }
         throw new Error(
           "Connection lost while waiting for the evaluateJS result; " +
             "the code may or may not have executed in Zotero. " +
-            "Verify its effect before re-running (the connection has been re-established)."
+            "Verify its effect before re-running " +
+            (reconnected
+              ? "(the connection has been re-established)."
+              : "(reconnection also failed; Zotero may be unreachable).")
         );
       }
 

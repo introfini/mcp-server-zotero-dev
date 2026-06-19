@@ -302,14 +302,14 @@ npm install
 npm run build
 
 # Build individual packages
-npm run build -w mcp-server
-npm run build -w zotero-plugin-mcp-rdp
+npm run build:server
+npm run build:plugin
 
 # Run tests
 npm test
 
 # Development mode (watch)
-npm run dev -w mcp-server
+npm run dev
 ```
 
 <details>

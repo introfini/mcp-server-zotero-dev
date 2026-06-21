@@ -107,6 +107,7 @@ export const executeJsTool: Tool = {
     "Execute JavaScript code in Zotero's privileged chrome context. " +
     "Has full access to Zotero APIs (Zotero.*, ZoteroPane, etc.). " +
     "Use for testing code snippets, inspecting state, or performing actions. " +
+    "Prefer a dedicated tool when one fits the question (zotero_db_query for library data, zotero_read_logs/zotero_read_errors for output, zotero_inspect_object for API discovery); reach for raw JS only when none does. " +
     "Code with top-level 'return' statements is auto-wrapped in an IIFE. " +
     "Tip: For complex objects, use JSON.stringify(obj) to get full data. " +
     "IMPORTANT: Before calling unknown APIs, use zotero_inspect_object to discover available methods - don't guess API names.",

@@ -14,6 +14,8 @@
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -96,11 +98,19 @@ import {
 } from "./tools/database.js";
 import { allPrompts, getPromptHandler } from "./prompts/index.js";
 
+// Read the version from package.json so the MCP handshake (serverInfo.version)
+// reports the real published version instead of a hard-coded constant.
+// dist/index.js is CommonJS, so __dirname points at dist/; package.json sits one
+// level up and is always included in the published tarball.
+const { version: serverVersion } = JSON.parse(
+  readFileSync(join(__dirname, "../package.json"), "utf8")
+) as { version: string };
+
 // Server instance
 const server = new Server(
   {
     name: "mcp-server-zotero-dev",
-    version: "0.1.0",
+    version: serverVersion,
   },
   {
     capabilities: {

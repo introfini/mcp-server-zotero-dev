@@ -2,6 +2,14 @@
 
 All notable changes to MCP Server Zotero Dev will be documented in this file.
 
+## [1.1.1] - 2026-06-22
+
+### Fixed
+- `serverInfo.version` in the MCP handshake now reads from `package.json` instead of a hard-coded `0.1.0`, so clients report the real running version.
+
+### Docs
+- README: pin an exact version in the `npx` config, and document the `npx` cache behavior, the `@latest` vs pin tradeoff, and the `-y` flag (without it `npx` hangs). Flag that `install-mcp` may write a config without `-y` or a version.
+
 ## [1.1.0] - 2026-06-22
 
 ### Added

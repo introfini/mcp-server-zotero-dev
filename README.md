@@ -91,7 +91,7 @@ Add to your MCP client config:
   "mcpServers": {
     "zotero-dev": {
       "command": "npx",
-      "args": ["-y", "@introfini/mcp-server-zotero-dev"],
+      "args": ["-y", "@introfini/mcp-server-zotero-dev@1.1.0"],
       "env": {
         "ZOTERO_RDP_PORT": "6100"
       }
@@ -100,6 +100,8 @@ Add to your MCP client config:
 }
 ```
 </details>
+
+> **Version & updates**: pin an exact version as shown above. A bare `npx <pkg>` (no version) keeps running whatever `npx` cached and won't pick up new releases, so always include a version and `-y` (without `-y`, `npx` hangs waiting for an install prompt). Bump the pinned version to upgrade, or use `@latest` to always fetch the newest at launch (auto-updates, but a bad release would run automatically and it adds a registry check on every start). Note that `install-mcp` may write a config without `-y` or a version, so the manual configuration above is the most robust path.
 
 **Restart your AI assistant** after adding the configuration.
 

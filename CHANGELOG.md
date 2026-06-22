@@ -2,7 +2,7 @@
 
 All notable changes to MCP Server Zotero Dev will be documented in this file.
 
-## [Unreleased]
+## [1.1.0] - 2026-06-22
 
 ### Added
 - **UI interaction tools** (`src/tools/interact.ts`) — the server could *inspect* the Zotero UI (`zotero_screenshot` / `zotero_inspect_element` / `zotero_get_dom_tree`) but not *act* on it. Two tools close that gap:

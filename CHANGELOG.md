@@ -2,6 +2,17 @@
 
 All notable changes to MCP Server Zotero Dev will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- **UI interaction tools** (`src/tools/interact.ts`) — the server could *inspect* the Zotero UI (`zotero_screenshot` / `zotero_inspect_element` / `zotero_get_dom_tree`) but not *act* on it. Two tools close that gap:
+  - `zotero_click_element` — click an element by CSS selector (`el.click()`, or a synthesized `mousedown`/`mouseup`/`click` sequence via `mouseEvents`). Supports `windowId` and an `index` for selectors that match several elements.
+  - `zotero_send_keys` — type text into an input/textarea/contenteditable, firing `input`/`change` so listeners react; optional `clear` and `pressEnter`.
+- Both reuse the existing RDP `evaluateJS` channel (no new actor) and **pierce open shadow roots** — Zotero's XUL custom elements (e.g. `search-textbox`) keep their internals in shadow DOM, which a document-level `querySelector` can't reach.
+
+### Known limitation
+- These tools cannot dismiss a **blocking** native modal dialog (`Services.prompt.confirmEx`): its nested modal event loop blocks the main thread that `evaluateJS` runs on. Non-modal windows and in-window elements work normally.
+
 ## [Plugin 1.0.1] - 2026-04-11
 
 ### Fixed

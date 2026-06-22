@@ -10,6 +10,12 @@
  * evaluateJS channel (no extra actor needed): the generated snippet resolves
  * the target window, finds the element, and dispatches the action in-context.
  *
+ * Caveat: events we synthesize (mouseEvents / pressEnter) are dispatched from
+ * page script, so they carry isTrusted === false. The default paths (el.click()
+ * and input/change) cover the common cases; the synthesized variants are a
+ * best-effort fallback and some native/XUL handlers deliberately ignore
+ * untrusted events, so they may not trigger native behaviour.
+ *
  * Caveat: a NATIVE modal dialog (Services.prompt.confirmEx and friends) spins a
  * nested modal event loop that blocks the main thread evaluateJS runs on, so
  * these tools cannot reliably dismiss a *blocking* modal. They target in-window
@@ -98,7 +104,9 @@ export const clickElementTool: Tool = {
         type: "boolean",
         description:
           "Dispatch synthesized mousedown/mouseup/click instead of element.click() " +
-          "(default false). Use for HTML content that needs real mouse events.",
+          "(default false). Use for HTML content that needs real mouse events. Note: " +
+          "these events are untrusted (isTrusted=false); some native/XUL handlers " +
+          "ignore them, so prefer the default element.click() for buttons/menuitems.",
         default: false,
       },
     },
@@ -139,7 +147,10 @@ export const sendKeysTool: Tool = {
       },
       pressEnter: {
         type: "boolean",
-        description: "Dispatch an Enter keydown/keyup after typing (default false)",
+        description:
+          "Dispatch an Enter keydown/keypress/keyup after typing (default false). " +
+          "Note: these events are untrusted (isTrusted=false) and some widgets " +
+          "ignore them — a direct input + change is more reliable where it fits.",
         default: false,
       },
     },
@@ -291,7 +302,7 @@ export async function handleSendKeys(
       ${
         pressEnter
           ? `
-        for (const type of ["keydown", "keyup"]) {
+        for (const type of ["keydown", "keypress", "keyup"]) {
           el.dispatchEvent(new win.KeyboardEvent(type, {
             bubbles: true, cancelable: true,
             key: "Enter", code: "Enter", keyCode: 13, which: 13

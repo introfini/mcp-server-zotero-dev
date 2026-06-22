@@ -22,6 +22,7 @@ A **Model Context Protocol (MCP) server** that enables AI assistants like Claude
 | Category | Capabilities |
 |----------|-------------|
 | 🎯 **UI Inspection** | Screenshots, DOM tree, element finding, computed styles |
+| 🖱️ **UI Interaction** | Click elements and type text (shadow-DOM aware) |
 | 💻 **JS Execution** | Run code in Zotero context, inspect APIs, test snippets |
 | 🔧 **Build Tools** | Scaffold integration for build, serve, hot reload |
 | 📋 **Logs & Errors** | Stream debug output, error console, watch for issues |
@@ -123,7 +124,7 @@ That's it! No special launch flags, no configuration. 🎉
 
 ---
 
-## 🧰 Available Tools (26 total)
+## 🧰 Available Tools (28 total)
 
 <details>
 <summary><strong>UI Inspection</strong> — Screenshots, DOM, styles</summary>
@@ -137,6 +138,18 @@ That's it! No special launch flags, no configuration. 🎉
 | `zotero_list_windows` | List all open Zotero windows |
 
 > **Screenshot Targets**: Main window, preferences, PDF reader, dialogs, or any element by selector. Use `highlightSelector` to add a red border before capture.
+
+</details>
+
+<details>
+<summary><strong>UI Interaction</strong> — Click and type in the Zotero UI</summary>
+
+| Tool | Description |
+|------|-------------|
+| `zotero_click_element` | Click an element by CSS selector (toolbar/menu button, preference control, list row). Pierces shadow DOM; `index` picks among multiple matches; `mouseEvents` synthesizes a full mouse sequence. |
+| `zotero_send_keys` | Type text into an input/textarea/contenteditable (focuses it first, fires input/change). Optional `clear` and `pressEnter`. |
+
+> Resolution tries light DOM first, then pierces open shadow roots (Zotero's XUL custom elements keep internals in shadow DOM). **Limitation**: cannot dismiss a *blocking* native modal dialog (`Services.prompt.confirmEx`) — its nested modal loop blocks the eval thread these tools run on.
 
 </details>
 

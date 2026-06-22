@@ -53,6 +53,12 @@ import {
   handleListWindows,
 } from "./tools/inspect.js";
 import {
+  clickElementTool,
+  sendKeysTool,
+  handleClickElement,
+  handleSendKeys,
+} from "./tools/interact.js";
+import {
   readLogsTool,
   readErrorsTool,
   clearLogsTool,
@@ -213,6 +219,8 @@ const allTools: Tool[] = [
   getDomTreeTool,
   getStylesTool,
   listWindowsTool,
+  clickElementTool,
+  sendKeysTool,
   readLogsTool,
   readErrorsTool,
   clearLogsTool,
@@ -293,6 +301,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         break;
       case "zotero_list_windows":
         content = await handleListWindows();
+        break;
+
+      // Interaction tools
+      case "zotero_click_element":
+        content = await handleClickElement(args as Record<string, unknown>);
+        break;
+      case "zotero_send_keys":
+        content = await handleSendKeys(args as Record<string, unknown>);
         break;
 
       // Logging tools

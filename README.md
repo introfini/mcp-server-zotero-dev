@@ -91,7 +91,7 @@ Add to your MCP client config:
   "mcpServers": {
     "zotero-dev": {
       "command": "npx",
-      "args": ["-y", "@introfini/mcp-server-zotero-dev@1.1.0"],
+      "args": ["-y", "@introfini/mcp-server-zotero-dev@1.1.1"],
       "env": {
         "ZOTERO_RDP_PORT": "6100"
       }

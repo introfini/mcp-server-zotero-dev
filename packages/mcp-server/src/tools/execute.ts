@@ -848,14 +848,14 @@ export async function handleOpenPreferences(
 
   const client = await getRdpClient();
 
-  // Build the code to open preferences. The snippet uses a top-level `return`,
-  // so wrap it via the shared helper (this path calls evaluateJS directly and
-  // doesn't get handleExecuteJs's auto-wrap).
-  const code = wrapInIIFE(
-    paneId
-      ? `Zotero.Utilities.Internal.openPreferences(${JSON.stringify(paneId)}); return 'Preferences opened to: ${paneId}';`
-      : `Zotero.Utilities.Internal.openPreferences(); return 'Preferences window opened';`
-  );
+  // Open the pane. We only need the side effect, so the eval returns nothing:
+  // that avoids a top-level `return` (no IIFE needed) and keeps paneId out of a
+  // generated string literal — it is only ever a JSON.stringify'd argument, so a
+  // paneId containing a quote can't break the snippet. The success message is
+  // built here in TypeScript instead of inside the eval.
+  const code = paneId
+    ? `Zotero.Utilities.Internal.openPreferences(${JSON.stringify(paneId)})`
+    : `Zotero.Utilities.Internal.openPreferences()`;
 
   const response = await client.evaluateJS(code);
 
@@ -869,7 +869,9 @@ export async function handleOpenPreferences(
     ];
   }
 
-  const result = await client.gripToValueAsync(response.result);
+  const result = paneId
+    ? `Preferences opened to: ${paneId}`
+    : "Preferences window opened";
 
   // Also list available panes for reference
   const panesCode = `

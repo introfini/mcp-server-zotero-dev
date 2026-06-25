@@ -118,7 +118,7 @@ export async function handleReadLogs(
         // Try multiple methods to get debug output (Zotero API varies by version)
         let output = '';
 
-        // Method 1: getConsoleViewerOutput (Zotero 7+) — returns an ARRAY in current Zotero
+        // Method 1: getConsoleViewerOutput (Zotero 7+) returns an ARRAY in current Zotero
         if (!output && typeof Zotero.Debug.getConsoleViewerOutput === 'function') {
           try {
             const cvo = Zotero.Debug.getConsoleViewerOutput();

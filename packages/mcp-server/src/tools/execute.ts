@@ -850,8 +850,8 @@ export async function handleOpenPreferences(
 
   // Build the code to open preferences
   const code = paneId
-    ? `Zotero.Utilities.Internal.openPreferences(${JSON.stringify(paneId)}); return 'Preferences opened to: ${paneId}';`
-    : `Zotero.Utilities.Internal.openPreferences(); return 'Preferences window opened';`;
+    ? `(function(){ Zotero.Utilities.Internal.openPreferences(${JSON.stringify(paneId)}); return 'Preferences opened to: ${paneId}'; })()`
+    : `(function(){ Zotero.Utilities.Internal.openPreferences(); return 'Preferences window opened'; })()`;
 
   const response = await client.evaluateJS(code);
 

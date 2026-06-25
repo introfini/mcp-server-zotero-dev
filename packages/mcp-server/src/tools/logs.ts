@@ -118,10 +118,11 @@ export async function handleReadLogs(
         // Try multiple methods to get debug output (Zotero API varies by version)
         let output = '';
 
-        // Method 1: getConsoleViewerOutput (Zotero 7+)
+        // Method 1: getConsoleViewerOutput (Zotero 7+) — returns an ARRAY in current Zotero
         if (!output && typeof Zotero.Debug.getConsoleViewerOutput === 'function') {
           try {
-            output = Zotero.Debug.getConsoleViewerOutput() || '';
+            const cvo = Zotero.Debug.getConsoleViewerOutput();
+            output = Array.isArray(cvo) ? cvo.join('\\n') : (cvo || '');
           } catch (e) {}
         }
 
@@ -152,8 +153,9 @@ export async function handleReadLogs(
           });
         }
 
-        // Parse and filter logs
-        let logLines = output.split('\\n').filter(line => line.trim());
+        // Parse and filter logs (coerce to text in case a method returned a non-string array)
+        const outputText = Array.isArray(output) ? output.join('\\n') : String(output || '');
+        let logLines = outputText.split('\\n').filter(line => line.trim());
 
         // Filter by content
         ${

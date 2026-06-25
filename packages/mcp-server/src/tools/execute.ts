@@ -848,10 +848,14 @@ export async function handleOpenPreferences(
 
   const client = await getRdpClient();
 
-  // Build the code to open preferences
-  const code = paneId
-    ? `(function(){ Zotero.Utilities.Internal.openPreferences(${JSON.stringify(paneId)}); return 'Preferences opened to: ${paneId}'; })()`
-    : `(function(){ Zotero.Utilities.Internal.openPreferences(); return 'Preferences window opened'; })()`;
+  // Build the code to open preferences. The snippet uses a top-level `return`,
+  // so wrap it via the shared helper (this path calls evaluateJS directly and
+  // doesn't get handleExecuteJs's auto-wrap).
+  const code = wrapInIIFE(
+    paneId
+      ? `Zotero.Utilities.Internal.openPreferences(${JSON.stringify(paneId)}); return 'Preferences opened to: ${paneId}';`
+      : `Zotero.Utilities.Internal.openPreferences(); return 'Preferences window opened';`
+  );
 
   const response = await client.evaluateJS(code);
 

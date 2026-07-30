@@ -48,14 +48,14 @@ export async function startup(
   await Zotero.uiReadyPromise;
 
   // Check if enabled via preference
-  const enabled = Zotero.Prefs.get("extensions.mcp-rdp.enabled") !== false;
+  const enabled = Zotero.Prefs.get("extensions.mcp-rdp.enabled", true) !== false;
   if (!enabled) {
     Zotero.debug("[MCP RDP] Disabled by preference");
     return;
   }
 
   // Get port from preference or use default
-  const port = (Zotero.Prefs.get("extensions.mcp-rdp.port") as number) || RDP_PORT;
+  const port = (Zotero.Prefs.get("extensions.mcp-rdp.port", true) as number) || RDP_PORT;
 
   try {
     const { DevToolsServer } = ChromeUtils.importESModule(

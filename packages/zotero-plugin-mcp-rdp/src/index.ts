@@ -44,8 +44,8 @@ async function startRDPServer(): Promise<void> {
   await Zotero.uiReadyPromise;
 
   // Get configuration from preferences (with defaults)
-  const port = (Zotero.Prefs.get("extensions.mcp-rdp.port") as number) || DEFAULT_PORT;
-  const enabled = Zotero.Prefs.get("extensions.mcp-rdp.enabled") !== false;
+  const port = (Zotero.Prefs.get("extensions.mcp-rdp.port", true) as number) || DEFAULT_PORT;
+  const enabled = Zotero.Prefs.get("extensions.mcp-rdp.enabled", true) !== false;
 
   if (!enabled) {
     Zotero.debug("[MCP] RDP server disabled by preference");

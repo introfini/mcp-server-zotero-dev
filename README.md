@@ -15,7 +15,7 @@
 
 ---
 
-A **Model Context Protocol (MCP) server** that enables AI assistants like Claude, Cursor, and Windsurf to build, test, and debug [Zotero](https://www.zotero.org) 7, 8, and 9 plugins. Screenshots, DOM state, debug logs, and JavaScript execution give the AI rich context to understand what's happening—and tools to help you fix it.
+A **Model Context Protocol (MCP) server** that enables AI assistants like Claude, Cursor, and Windsurf to build, test, and debug [Zotero](https://www.zotero.org) 7, 8, 9, and 10 plugins. Screenshots, DOM state, debug logs, and JavaScript execution give the AI rich context to understand what's happening—and tools to help you fix it.
 
 ## ✨ Features
 
@@ -36,7 +36,7 @@ A **Model Context Protocol (MCP) server** that enables AI assistants like Claude
 ### Prerequisites
 
 - **Node.js** 20+ and npm
-- **Zotero 7+** — Works on all Zotero 7, 8, and 9 builds (release, beta, dev)
+- **Zotero 7+** — Works on all Zotero 7, 8, 9, and 10 builds (release, beta, dev)
 - For plugin development: [zotero-plugin-scaffold](https://github.com/windingwind/zotero-plugin-scaffold)
 
 ### 1. Install MCP Server
@@ -360,6 +360,7 @@ mcp-server-zotero-dev/
 
 - **[Architecture & Technical Learnings](ARCHITECTURE.md)** — Deep dive into RDP protocol, actor hierarchy, and common pitfalls
 - **[Zotero Plugin Development](https://www.zotero.org/support/dev/client_coding/plugin_development)** — Official docs
+- **[Zotero 10 for Developers](https://www.zotero.org/support/dev/zotero_10_for_developers)** — Migration guide for the latest major
 - **[Zotero 7 for Developers](https://www.zotero.org/support/dev/zotero_7_for_developers)** — Migration guide
 - **[zotero-plugin-scaffold](https://github.com/windingwind/zotero-plugin-scaffold)** — Build tooling
 - **[zotero-plugin-template](https://github.com/windingwind/zotero-plugin-template)** — Starter template

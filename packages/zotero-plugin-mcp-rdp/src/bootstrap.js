@@ -220,19 +220,30 @@ async function startup({ id, version, resourceURI, rootURI }, reason) {
   //
   // The documented name is `extensions.mcp-rdp.port`, which needs the global
   // flag -- without it Zotero.Prefs resolves the name under `extensions.zotero.`.
-  // 1.0.4 fixed that in src/bootstrap.ts + src/index.ts, but scripts/build.mjs
-  // ships THIS file verbatim, so the released plugin never got the fix.
-  //
-  // Read BOTH, documented name first: every profile configured against the
-  // released builds has its port stored at the `extensions.zotero.`-prefixed
-  // name, and reading only the documented one would silently send those
-  // instances back to the default 6100.
+  // Releases up to 1.0.4 read it without the flag, so any profile that managed
+  // to configure a custom port has it stored under the prefixed name. Read
+  // both, documented first, so those instances keep their port instead of
+  // silently reverting to 6100. The fallback can go after a deprecation period.
   try {
     var prefPort = Zotero.Prefs.get("extensions.mcp-rdp.port", true);
     if (!prefPort) {
       try { prefPort = Zotero.Prefs.get("extensions.mcp-rdp.port"); } catch (e2) {}
     }
-    if (prefPort) rdpPort = prefPort;
+    // Validate before use. Prefs.get returns whatever type the pref was created
+    // with, and Zotero's Config Editor pre-selects Boolean - a pref created
+    // without switching to Number reads back as `true`. SocketListener treats a
+    // non-numeric portOrPath as a PIPE PATH and opens successfully, so the
+    // bridge would log success, serve nothing over TCP, and have the health
+    // check reopen it every 10s forever. Keep the default instead and say so.
+    if (prefPort) {
+      var parsedPort = parseInt(prefPort, 10);
+      if (parsedPort > 0 && parsedPort < 65536) {
+        rdpPort = parsedPort;
+      } else {
+        log("Ignoring invalid extensions.mcp-rdp.port value (" + prefPort +
+            ") - staying on port " + rdpPort);
+      }
+    }
   } catch (e) {}
 
   log("Starting RDP server on port " + rdpPort);

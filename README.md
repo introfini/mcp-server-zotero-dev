@@ -329,6 +329,27 @@ Give that profile its own `extensions.mcp-rdp.port` and the two bridges stay out
 
 Set `extensions.mcp-rdp.enabled` to `false` (**Boolean**) in the Config Editor and restart Zotero. The plugin stays installed but opens no listener, and no MCP client can reach Zotero until you set it back to `true`.
 
+### Checking what the bridge did
+
+The plugin appends one line per lifecycle **transition** to `mcp-rdp-events.log` in your Zotero **profile** directory: startup, listener open, listener down, listener recovered, shutdown. It survives restarts and is readable without Zotero running, which makes it the first place to look when an MCP client reports `Cannot connect to Zotero RDP`:
+
+```
+2026-09-17T07:52:36.201Z startup v1.0.5 reason=1
+2026-09-17T07:52:37.914Z listener DOWN on port 6177 - failed to open at startup: port 6177 does not answer (held by another process?)
+2026-09-17T07:53:46.552Z listener RECOVERED on port 6177 after 6 failed checks, 69s down
+2026-09-17T08:01:12.083Z shutdown v1.0.5 reason=2
+```
+
+What to read from it:
+
+- **`listener DOWN … failed to open at startup`** — something else holds the port: another Zotero instance, a previous one that has not released it, or a process that answers on the port without speaking RDP. The reason after the colon says which of the last two it is.
+- **`listener DOWN … stopped answering`** — the listener was up and then died. The health check reopens it; the next line tells you when that worked and how long the gap was.
+- **`listener RECOVERED … after N failed checks`** — the bridge came back on its own. A large N means the port was held for a long time; nothing is logged per attempt, so the file stays short no matter how long the outage.
+- **A `startup` with no `shutdown` before it** — Zotero was killed or crashed rather than exiting cleanly. Usually the answer to "the bridge stopped working" is simply that Zotero is not running.
+- **No new lines at all** — the plugin never started: disabled by preference, or not installed in the profile you are actually running.
+
+`log()` output goes to `dump()` (lost unless Zotero was started from a console) and `Zotero.debug()` (a no-op unless debug output is enabled), so this file is the only durable record of a boot-time failure. A healthy session adds three lines (startup, open, shutdown); an outage adds two more, whatever its length.
+
 ---
 
 ## 📸 Screenshot Examples

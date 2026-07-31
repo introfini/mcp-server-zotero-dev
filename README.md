@@ -318,6 +318,27 @@ The port lives on **both sides of the bridge**, and both have to agree on it.
 
 Set `extensions.mcp-rdp.enabled` to `false` (**Boolean**) in the Config Editor and restart Zotero. The plugin stays installed but opens no listener, and no MCP client can reach Zotero until you set it back to `true`.
 
+### Checking what the bridge did
+
+The plugin appends one line per lifecycle event to `mcp-rdp-events.log` in your Zotero **profile** directory. It survives restarts and is readable without Zotero running, which makes it the first place to look when an MCP client reports `Cannot connect to Zotero RDP`:
+
+```
+2026-07-31T08:39:23.995Z startup v1.0.5 reason=1
+2026-07-31T08:39:24.004Z listener OPEN on port 6100
+2026-07-31T08:53:11.054Z health check: port dead - reopening
+2026-07-31T08:53:11.055Z health check: listener reopened OK
+2026-07-31T09:33:07.581Z shutdown v1.0.5 reason=2
+```
+
+What to read from it:
+
+- **`listener FAILED to open at startup`** — something else holds the port. Another Zotero instance, or a previous one that hasn't released it.
+- **Repeating `health check: port dead - reopening`** — the listener keeps being lost. Expected while another process holds the port; the bridge recovers on its own once it frees.
+- **A `startup` with no matching `shutdown` before it** — Zotero was killed or crashed rather than exiting cleanly. Usually the answer to "the bridge stopped working" is simply that Zotero is not running.
+- **No new lines at all** — the plugin never started: disabled by preference, or not installed in the profile you are actually running.
+
+`log()` output goes to `dump()` (lost unless Zotero was started from a console) and `Zotero.debug()` (a no-op unless debug output is enabled), so this file is the only durable record of a boot-time failure.
+
 ---
 
 ## 📸 Screenshot Examples

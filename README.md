@@ -279,6 +279,47 @@ That's it! No special launch flags, no configuration. 🎉
 
 ---
 
+## 🔌 Changing the RDP Port
+
+The bridge listens on port `6100` by default. You only need to change it if you run **two Zotero instances at the same time** (a normal profile and a development one, say), or if another process already holds 6100.
+
+The port lives on **both sides of the bridge**, and both have to agree on it.
+
+**1. Zotero side** — set the plugin preference:
+
+1. **Settings → Advanced → Config Editor**, and accept the warning
+2. Search for `extensions.mcp-rdp.port`
+3. If it doesn't exist, create it: select **Number**, name it `extensions.mcp-rdp.port`, and enter your port
+4. **Restart Zotero** — the listener only opens at startup
+
+> **Watch the type.** The Config Editor pre-selects **Boolean**. Creating the preference without switching to **Number** stores `true` instead of a port, and Zotero then opens the bridge on a local pipe rather than a TCP port — the debug log reports success while no MCP client can connect.
+
+**2. Client side** — set `ZOTERO_RDP_PORT` to the same value in your MCP client config:
+
+```json
+{
+  "mcpServers": {
+    "zotero-dev": {
+      "command": "npx",
+      "args": ["-y", "@introfini/mcp-server-zotero-dev@1.1.2"],
+      "env": {
+        "ZOTERO_RDP_PORT": "6101"
+      }
+    }
+  }
+}
+```
+
+> **Change both or neither.** Moving only one side disconnects the bridge: Zotero listens on one port while the client keeps dialing the other.
+
+> **Requires MCP Bridge plugin 1.0.5 or later.** In 1.0.4 and earlier, `extensions.mcp-rdp.port` was read under the wrong preference branch and silently ignored, so the bridge stayed on 6100 no matter what you set. If you configured a custom port against an older build, it is stored as `extensions.zotero.extensions.mcp-rdp.port` — that name still works, but prefer the one above.
+
+### Disabling the bridge
+
+Set `extensions.mcp-rdp.enabled` to `false` (**Boolean**) in the Config Editor and restart Zotero. The plugin stays installed but opens no listener, and no MCP client can reach Zotero until you set it back to `true`.
+
+---
+
 ## 📸 Screenshot Examples
 
 ```typescript

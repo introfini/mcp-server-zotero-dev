@@ -384,7 +384,7 @@ mcp-server-zotero-dev/
 │   │
 │   └── zotero-plugin-mcp-rdp/    # Tiny Zotero plugin (.xpi)
 │       ├── src/
-│       │   └── index.ts          # Starts RDP server
+│       │   └── bootstrap.js      # Starts RDP server (shipped verbatim)
 │       ├── addon/
 │       │   └── manifest.json
 │       └── package.json

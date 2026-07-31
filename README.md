@@ -312,6 +312,17 @@ The port lives on **both sides of the bridge**, and both have to agree on it.
 
 > **Change both or neither.** Moving only one side disconnects the bridge: Zotero listens on one port while the client keeps dialing the other.
 
+### Actually running two instances
+
+Launching Zotero a second time hands you the window you already have — like Firefox, it forwards to the running instance instead of starting another. A second instance needs its own profile *and* `-no-remote`:
+
+```bash
+# macOS; adjust the binary path on Windows/Linux
+MOZ_NO_REMOTE=1 "/Applications/Zotero.app/Contents/MacOS/zotero" -P <profile-name> -no-remote
+```
+
+Give that profile its own `extensions.mcp-rdp.port` and the two bridges stay out of each other's way. Verified with 9.0.6 on 6100 and 10.0-beta.22 on 6101 at the same time.
+
 > **Requires MCP Bridge plugin 1.0.5 or later.** In 1.0.4 and earlier, `extensions.mcp-rdp.port` was read under the wrong preference branch and silently ignored, so the bridge stayed on 6100 no matter what you set. If you configured a custom port against an older build, it is stored as `extensions.zotero.extensions.mcp-rdp.port` — that name still works, but prefer the one above.
 
 ### Disabling the bridge

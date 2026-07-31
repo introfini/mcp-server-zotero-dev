@@ -216,9 +216,22 @@ async function startup({ id, version, resourceURI, rootURI }, reason) {
     }
   } catch (e) {}
 
-  // Get port (default 6100)
+  // Get port (default 6100).
+  //
+  // The documented name is `extensions.mcp-rdp.port`, which needs the global
+  // flag -- without it Zotero.Prefs resolves the name under `extensions.zotero.`.
+  // 1.0.4 fixed that in src/bootstrap.ts + src/index.ts, but scripts/build.mjs
+  // ships THIS file verbatim, so the released plugin never got the fix.
+  //
+  // Read BOTH, documented name first: every profile configured against the
+  // released builds has its port stored at the `extensions.zotero.`-prefixed
+  // name, and reading only the documented one would silently send those
+  // instances back to the default 6100.
   try {
-    var prefPort = Zotero.Prefs.get("extensions.mcp-rdp.port");
+    var prefPort = Zotero.Prefs.get("extensions.mcp-rdp.port", true);
+    if (!prefPort) {
+      try { prefPort = Zotero.Prefs.get("extensions.mcp-rdp.port"); } catch (e2) {}
+    }
     if (prefPort) rdpPort = prefPort;
   } catch (e) {}
 

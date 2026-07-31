@@ -2,6 +2,18 @@
 
 All notable changes to MCP Server Zotero Dev will be documented in this file.
 
+## [Plugin 1.0.5] - 2026-07-31
+
+### Fixed
+- **`extensions.mcp-rdp.port` is now actually read** ([#17](https://github.com/introfini/mcp-server-zotero-dev/pull/17), thanks to @mjthoraval). The 1.0.4 fix changed `src/bootstrap.ts` and `src/index.ts`, but `scripts/build.mjs` ships `src/bootstrap.js`, so the released XPI never got it: the preference was read without the global flag, resolved under `extensions.zotero.`, and the documented name did nothing. Both names are read now, documented first, falling back to the legacy `extensions.zotero.`-prefixed one so profiles with a custom port keep it.
+- **Invalid port values no longer break the bridge.** Zotero's Config Editor pre-selects **Boolean**, so a preference created without switching to **Number** stored `true`. `SocketListener` treats a non-numeric `portOrPath` as a pipe path and opens successfully, leaving the bridge logging success while serving nothing over TCP and reopening every 10s. The value is now parsed and range-checked: anything invalid keeps port 6100 and is logged.
+
+### Removed
+- **Dead `src/bootstrap.ts` and `src/index.ts`.** Nothing ever compiled them — the plugin has no `tsconfig`, the root `typecheck`/`lint` run with `--if-present`, and there is no CI — and they called three DevTools APIs that do not exist (`devtools-server.mjs`, `DevToolsServer.openListener`, `DevToolsServer.closeAllListeners`). Keeping a second, unbuildable copy of the bootstrap is what shipped the broken 1.0.4 fix. `main` now points at `src/bootstrap.js`, the file the build actually ships.
+
+### Docs
+- README: new **Changing the RDP Port** section covering the Zotero-side preference, the matching `ZOTERO_RDP_PORT` on the client, the fact that both sides must agree, and the Config Editor type trap. Also documents `extensions.mcp-rdp.enabled`, which had never been mentioned anywhere.
+
 ## [1.1.1] - 2026-06-22
 
 ### Fixed

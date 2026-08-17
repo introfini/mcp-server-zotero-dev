@@ -2,6 +2,14 @@
 
 All notable changes to MCP Server Zotero Dev will be documented in this file.
 
+## [1.1.3] - 2026-08-17
+
+### Fixed
+- **`zotero_db_query` failed on every query returning rows** ([#20](https://github.com/introfini/mcp-server-zotero-dev/issues/20), [#21](https://github.com/introfini/mcp-server-zotero-dev/pull/21), thanks to @hainingpan), with `result.columns.join is not a function` — broken since 1.0.0 on every Zotero version. Two independent defects, either one fatal:
+  - Column names were derived with `Object.keys(rows[0])`, but `Zotero.DB.queryAsync` wraps rows in a Proxy with only `get`/`has` traps (no `ownKeys`), so key enumeration returned the underlying `mozIStorageRow`'s XPCOM members instead of column names. Rows are now read via `queryAsync`'s `onRow` callback (raw `mozIStorageRow`, positional `getResultByIndex()`), with column names parsed from the SELECT list host-side and a `col1..colN` fallback when the list isn't statically parseable (e.g. `SELECT *`).
+  - The eval returned a raw nested object, which RDP grip resolution flattens to placeholder strings (`columns` arrived as `"[Array]"`). Payloads are now `JSON.stringify`d inside the eval and parsed host-side, matching the convention already used by the other tool files.
+- **`zotero_db_schema`** shared the raw-object serialization defect and got the same JSON-encoding fix on both branches (single-table and table listing).
+
 ## [Plugin 1.0.5] - 2026-07-31
 
 ### Fixed

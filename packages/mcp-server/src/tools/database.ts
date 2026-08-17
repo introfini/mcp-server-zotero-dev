@@ -114,24 +114,74 @@ async function executeViaZotero(
     finalQuery = `${finalQuery} LIMIT ${limit}`;
   }
 
+  // Column names cannot be recovered inside the eval: Zotero.DB.queryAsync
+  // wraps each row in a Proxy with only get/has traps (no ownKeys) - a shape
+  // unchanged in Zotero since 5.0. Object.keys(row) therefore forwards to the
+  // underlying XPCOM mozIStorageRow and returns its props (QueryInterface,
+  // getResultByName, ...) instead of column names, and even
+  // row.getResultByName is unreachable through the proxy's get trap. So we
+  // parse column names from an explicit SELECT list here in Node and fall
+  // back to col1..colN when the list is not statically parseable
+  // (e.g. SELECT *).
+  let parsedColumns: string[] = [];
+  // Prefer the list before FROM; fall back to a FROM-less form (e.g.
+  // "SELECT 1 AS n"), stopping at LIMIT so the appended clause above does not
+  // get parsed as a column.
+  const selectMatch =
+    finalQuery.match(/^\s*select\s+(?:distinct\s+)?([\s\S]*?)\s+from\s/i) ??
+    finalQuery.match(/^\s*select\s+(?:distinct\s+)?([\s\S]*?)(?:\s+limit\s|\s*$)/i);
+  if (selectMatch) {
+    const tokens = selectMatch[1].split(",").map(c => c.trim());
+    const hasBareStar = tokens.some(t => t === "*" || /\.\*$/.test(t));
+    if (!hasBareStar) {
+      parsedColumns = tokens.map(c => {
+        const asMatch = c.match(/\s+as\s+["'`[]?(\w+)["'`\]]?$/i);
+        if (asMatch) return asMatch[1];
+        const tailMatch = c.match(/(\w+)$/);
+        return tailMatch ? tailMatch[1] : c;
+      });
+    }
+  }
+
   const code = `
     (async () => {
       try {
         const query = ${JSON.stringify(finalQuery)};
         const params = ${JSON.stringify(params)};
+        const parsedColumns = ${JSON.stringify(parsedColumns)};
 
-        const rows = await Zotero.DB.queryAsync(query, params);
+        // onRow hands us the raw mozIStorageRow (no proxy), where positional
+        // access works regardless of column names.
+        const values = [];
+        let total = 0;
+        await Zotero.DB.queryAsync(query, params, { onRow: (row) => {
+          total++;
+          if (values.length >= ${limit}) return;
+          const vals = [];
+          for (let i = 0; i < row.numEntries; i++) {
+            vals.push(row.getResultByIndex(i));
+          }
+          values.push(vals);
+        } });
 
-        // Get column names from first row
-        const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
+        const width = values.length ? values[0].length : 0;
+        const columns = parsedColumns.length === width
+          ? parsedColumns
+          : Array.from({ length: width }, (_, i) => "col" + (i + 1));
 
-        return {
-          rows: rows.slice(0, ${limit}),
-          columns,
-          total: rows.length
-        };
+        const rows = values.map((vals) => {
+          const o = {};
+          for (let i = 0; i < width; i++) o[columns[i]] = vals[i];
+          return o;
+        });
+
+        // JSON-encode the payload: nested object/array grips do not survive
+        // RDP grip resolution (the columns array previously came back as an
+        // unresolved grip object, crashing ".join is not a function"), but
+        // strings marshal reliably as longString grips.
+        return JSON.stringify({ rows, columns, total });
       } catch (error) {
-        return { error: error.message || String(error) };
+        return JSON.stringify({ error: error.message || String(error) });
       }
     })()
   `;
@@ -154,7 +204,10 @@ async function executeViaZotero(
     );
   }
 
-  const result = resultValue as {
+  // Payload is JSON-encoded in the eval (see above) - decode it here.
+  const result = (typeof resultValue === "string"
+    ? JSON.parse(resultValue)
+    : resultValue) as {
     rows?: unknown[];
     columns?: string[];
     total?: number;
@@ -221,10 +274,14 @@ export async function handleDbSchema(
           );
 
           if (rows.length === 0) {
-            return { error: "Table not found: " + tableName };
+            return JSON.stringify({ error: "Table not found: " + tableName });
           }
 
-          return {
+          // JSON-encode: nested object/array grips do not survive RDP grip
+          // resolution, but strings marshal reliably as longString grips.
+          // (Property access by exact column name works through Zotero's row
+          // proxy; only the nested return structure was the problem.)
+          return JSON.stringify({
             table: tableName,
             columns: rows.map(r => ({
               name: r.name,
@@ -233,9 +290,9 @@ export async function handleDbSchema(
               defaultValue: r.dflt_value,
               primaryKey: r.pk === 1
             }))
-          };
+          });
         } catch (error) {
-          return { error: error.message };
+          return JSON.stringify({ error: error.message });
         }
       })()
     `;
@@ -252,7 +309,10 @@ export async function handleDbSchema(
       throw new Error("Schema query failed: received undefined result from Zotero");
     }
 
-    const result = resultValue as {
+    // Payload is JSON-encoded in the eval (see above) - decode it here.
+    const result = (typeof resultValue === "string"
+      ? JSON.parse(resultValue)
+      : resultValue) as {
       table?: string;
       columns?: Array<{
         name: string;
@@ -299,9 +359,11 @@ export async function handleDbSchema(
           result.push({ name: t.name, rowCount: count });
         }
 
-        return result;
+        // JSON-encode: array-of-object grips do not survive RDP grip
+        // resolution, but strings marshal reliably as longString grips.
+        return JSON.stringify(result);
       } catch (error) {
-        return { error: error.message };
+        return JSON.stringify({ error: error.message });
       }
     })()
   `;
@@ -318,11 +380,15 @@ export async function handleDbSchema(
     throw new Error("Failed to list tables: received undefined result from Zotero");
   }
 
-  if (typeof resultValue === "object" && resultValue !== null && "error" in resultValue) {
-    throw new Error((resultValue as { error: string }).error);
+  // Payload is JSON-encoded in the eval (see above) - decode it here.
+  const decoded: unknown =
+    typeof resultValue === "string" ? JSON.parse(resultValue) : resultValue;
+
+  if (typeof decoded === "object" && decoded !== null && "error" in decoded) {
+    throw new Error((decoded as { error: string }).error);
   }
 
-  const tables = resultValue as Array<{ name: string; rowCount: number }>;
+  const tables = decoded as Array<{ name: string; rowCount: number }>;
 
   const lines = [`Database tables (${tables.length}):\n`];
 

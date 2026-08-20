@@ -423,12 +423,14 @@ mcp-server-zotero-dev/
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please:
+Contributions are welcome. See **[CONTRIBUTING.md](CONTRIBUTING.md)** for setup, test conventions and the codebase-specific rules worth knowing before you start.
+
+The short version:
 
 1. Follow existing code patterns
-2. Add tests for new features
+2. Add tests for new features, and skip rather than fail when Zotero is not running
 3. Update documentation
-4. Ensure `npm test` and `npm run lint` pass
+4. There is no CI, so run `npm run build`, `npm run typecheck`, `npm run lint` and `npm test` yourself, and say in the PR which Zotero version you verified against
 
 ---
 

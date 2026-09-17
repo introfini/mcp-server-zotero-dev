@@ -264,6 +264,20 @@ send({
 // Response: { result: "7.0.0-beta.83+..." }
 ```
 
+### A Zotero window must be open
+
+`getTarget` on the parent `ProcessDescriptor` hands back the **main window's**
+global only while a Zotero window exists. With the app running windowless
+(macOS keeps it in the Dock after the last window is closed; the process and
+the RDP port stay up) the target degrades to an empty `about:blank` frame:
+`this` is still a `Window`, `Services` resolves, but `typeof Zotero` is
+`"undefined"` and every evaluation that touches it fails with
+`ReferenceError: Zotero is not defined`. Reachability therefore depends on an
+open window, not on the Zotero process. `zotero_ping` probes `typeof Zotero`
+for exactly this reason and reports "bridge reachable, Zotero not" instead of
+a success banner (#24); a readiness check that only tests whether the port
+accepts a TCP connection cannot tell the two apart.
+
 ### Available Root Actor Methods
 
 From `requestTypes`:

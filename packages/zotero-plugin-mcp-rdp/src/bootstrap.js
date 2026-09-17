@@ -12,6 +12,9 @@ var SocketListener = null;
 var rdpPort = 6100;
 var isShuttingDown = false;
 var devToolsLoader = null;
+// Why the last openListener() returned false - quoted by the startup log and
+// the health check so the reason is not lost (see openListener()).
+var lastOpenFailure = "";
 
 // Log using dump() and Zotero.debug() - console is NOT available in bootstrap context
 function log(msg) {
@@ -82,9 +85,43 @@ async function openListener() {
 
     rdpListener = new SocketListener(DevToolsServer, { portOrPath: rdpPort });
     await rdpListener.open();
-    log("Listener opened on port " + rdpPort);
+
+    // open() resolving is NOT proof that this process serves the port (#19).
+    // Mozilla server sockets bind with SO_REUSEADDR, and on Windows that lets
+    // a second bind succeed on a port another process already listens on:
+    // open() resolves, nothing is served by us, and every later claim
+    // ("SUCCESS", "reopened by health check") is false while the health check
+    // reopens every 10s forever. macOS rejects the second bind with
+    // EADDRINUSE, so there open() throws and the catch below reports the
+    // failure correctly. Verifying here makes both platforms behave the same,
+    // and catches any other way a listener can come up without serving.
+    //
+    // Two checks, both needed:
+    //  1. probeConnect(): something on the port answers with the RDP intro
+    //     packet (the same client-side probe the health check uses).
+    //  2. DevToolsServer._nextConnID advanced: it was OUR server that accepted
+    //     the probe. _onConnection() increments that counter for every
+    //     accepted socket, so an intro sent by another Zotero holding the
+    //     port leaves it untouched. The probe alone cannot tell the two
+    //     apart - both speak RDP.
+    var connsBefore = DevToolsServer._nextConnID;
+    var answered = await probeConnect();
+    var accepted = typeof connsBefore !== "number"   // no counter: trust the probe
+      || DevToolsServer._nextConnID > connsBefore;
+    if (!answered || !accepted) {
+      lastOpenFailure = !answered
+        ? "port " + rdpPort + " does not answer (held by another process?)"
+        : "port " + rdpPort + " is served by another process";
+      log("Listener open on port " + rdpPort + " NOT verified: " + lastOpenFailure);
+      try { rdpListener.close(); } catch (e) {}
+      rdpListener = null;
+      return false;
+    }
+    lastOpenFailure = "";
+    log("Listener opened on port " + rdpPort + " (verified)");
     return true;
   } catch (e) {
+    lastOpenFailure = "open() failed: " + e;
     log("Error opening listener: " + e);
     rdpListener = null;
     // Reset stack on error so it will be recreated next time
@@ -167,6 +204,7 @@ async function checkListener() {
   }
   var ok = await openListener();
   if (ok) log("Listener (re)opened by health check");
+  else log("Health check: reopen failed - " + lastOpenFailure);
 }
 
 function startHealthCheck() {
@@ -271,7 +309,7 @@ async function startup({ id, version, resourceURI, rootURI }, reason) {
     if (success) {
       log("SUCCESS - Server listening on port " + rdpPort);
     } else {
-      log("Failed to open listener");
+      log("Failed to open listener: " + lastOpenFailure);
     }
     // Start the health check UNCONDITIONALLY. The non-destructive check
     // reopens the listener whenever the port stops answering, so a failed

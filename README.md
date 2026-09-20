@@ -331,7 +331,7 @@ Set `extensions.mcp-rdp.enabled` to `false` (**Boolean**) in the Config Editor a
 
 ### Checking what the bridge did
 
-The plugin appends one line per lifecycle **transition** to `mcp-rdp-events.log` in your Zotero **profile** directory: startup, listener open, listener down, listener recovered, shutdown. It survives restarts and is readable without Zotero running, which makes it the first place to look when an MCP client reports `Cannot connect to Zotero RDP`:
+The plugin appends one line per lifecycle **transition** to `mcp-rdp-events.log` in your Zotero **profile** directory: startup, listener open, listener down, listener recovered, listener flapping, shutdown. It survives restarts and is readable without Zotero running, which makes it the first place to look when an MCP client reports `Cannot connect to Zotero RDP`:
 
 ```
 2026-09-17T07:52:36.201Z startup v1.0.5 reason=1
@@ -345,10 +345,11 @@ What to read from it:
 - **`listener DOWN … failed to open at startup`** — something else holds the port: another Zotero instance, a previous one that has not released it, or a process that answers on the port without speaking RDP. The reason after the colon says which of the last two it is.
 - **`listener DOWN … stopped answering`** — the listener was up and then died. The health check reopens it; the next line tells you when that worked and how long the gap was.
 - **`listener RECOVERED … after N failed checks`** — the bridge came back on its own. A large N means the port was held for a long time; nothing is logged per attempt, so the file stays short no matter how long the outage.
+- **`listener FLAPPING`**, later closed by **`listener STEADY … after N flaps`** — the listener keeps dying and coming straight back on the first reopen. That is a different fault from an outage: the port is yours, something is tearing the listener down. The whole run costs these two lines however long it goes on, so N is the number to report if you open an issue.
 - **A `startup` with no `shutdown` before it** — Zotero was killed or crashed rather than exiting cleanly. Usually the answer to "the bridge stopped working" is simply that Zotero is not running.
 - **No new lines at all** — the plugin never started: disabled by preference, or not installed in the profile you are actually running.
 
-`log()` output goes to `dump()` (lost unless Zotero was started from a console) and `Zotero.debug()` (a no-op unless debug output is enabled), so this file is the only durable record of a boot-time failure. A healthy session adds three lines (startup, open, shutdown); an outage adds two more, whatever its length.
+`log()` output goes to `dump()` (lost unless Zotero was started from a console) and `Zotero.debug()` (a no-op unless debug output is enabled), so this file is the only durable record of a boot-time failure. A healthy session adds three lines (startup, open, shutdown); an outage adds two more, and a run of flaps two more, whatever their length. No failure mode writes per tick.
 
 ---
 

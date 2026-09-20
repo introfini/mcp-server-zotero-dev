@@ -15,6 +15,8 @@ var devToolsLoader = null;
 // Why the last openListener() returned false - quoted by the startup log and
 // the health check so the reason is not lost (see openListener()).
 var lastOpenFailure = "";
+// One-shot guard for the "DevTools has no connection counter" warning.
+var counterWarned = false;
 
 // Log using dump() and Zotero.debug() - console is NOT available in bootstrap context
 function log(msg) {
@@ -55,33 +57,83 @@ function crumb(msg) {
   }
 }
 
-// Listener state as the breadcrumbs know it. A crumb is written only when it
-// FLIPS; failed reopen attempts while down are counted, not logged, and the
-// count and duration go into the recovery line.
+// Listener state as the breadcrumbs know it. A crumb is written only when the
+// state FLIPS, with two dampers so that no failure mode can grow the file
+// without bound:
+//
+//  - An outage is crumbed when a reopen attempt FAILS, not when the probe
+//    first misses. Further failed attempts are counted, not logged, and the
+//    count and duration go into the recovery line.
+//  - A down period that ends on the very first reopen is a FLAP, not an
+//    outage. Without this, a listener that dies and reopens on every 10s tick
+//    writes a DOWN and a RECOVERED per tick: 2,658 lines for the kind of
+//    episode seen in June, which is the unbounded growth transition logging
+//    was meant to remove. A run of flaps costs one FLAPPING line and one
+//    STEADY line, however long it lasts.
 var listenerUp = false;
-var downSince = 0;
-var downChecks = 0;
+var downSince = 0;       // when the current down period started (0 while up)
+var downChecks = 0;      // failed reopen attempts in this down period
+var downLogged = false;  // has this down period been crumbed?
+var flapCount = 0;       // short down/up cycles since the last STEADY
+var flapSince = 0;       // when the current run of flaps started
+var healthyChecks = 0;   // consecutive healthy probes since the last flap
 
-function markListenerDown(why) {
-  if (!listenerUp && downSince) return;   // already down: stay quiet
+// `confirmed` means a reopen attempt has actually failed. An unconfirmed down
+// (the probe missed, the reopen has not been tried yet) stays silent until it
+// either fails once - and is crumbed then - or turns out to be a flap.
+function markListenerDown(why, confirmed) {
+  if (!listenerUp && downSince) {         // already down
+    if (confirmed && !downLogged) {
+      downLogged = true;
+      crumb("listener DOWN on port " + rdpPort + " - " + why);
+    }
+    return;
+  }
   listenerUp = false;
   downSince = Date.now();
   downChecks = 0;
-  crumb("listener DOWN on port " + rdpPort + " - " + why);
+  downLogged = false;
+  if (confirmed) {
+    downLogged = true;
+    crumb("listener DOWN on port " + rdpPort + " - " + why);
+  }
 }
 
 function markListenerUp() {
   if (listenerUp) return;
-  if (downSince) {
+  if (downLogged) {
     var secs = Math.round((Date.now() - downSince) / 1000);
     crumb("listener RECOVERED on port " + rdpPort + " after " + downChecks
       + " failed check" + (downChecks === 1 ? "" : "s") + ", " + secs + "s down");
+  } else if (downSince) {
+    // Down and back on the first reopen: a flap. One line for the whole run.
+    flapCount++;
+    if (flapCount === 1) {
+      flapSince = Date.now();
+      crumb("listener FLAPPING on port " + rdpPort + " - down and back within one"
+        + " check; further flaps are counted, not logged");
+    }
   } else {
     crumb("listener OPEN on port " + rdpPort);
   }
   listenerUp = true;
   downSince = 0;
   downChecks = 0;
+  downLogged = false;
+  healthyChecks = 0;
+}
+
+// Called on every healthy probe. Silent unless a run of flaps is open, in
+// which case it closes it once the listener has held for a minute.
+function markListenerHealthy() {
+  if (!flapCount) return;
+  if (++healthyChecks < 6) return;        // ~1 minute at the 10s interval
+  var secs = Math.round((Date.now() - flapSince) / 1000);
+  crumb("listener STEADY on port " + rdpPort + " after " + flapCount + " flap"
+    + (flapCount === 1 ? "" : "s") + " in " + secs + "s");
+  flapCount = 0;
+  flapSince = 0;
+  healthyChecks = 0;
 }
 
 // Initialize or reinitialize the DevTools stack
@@ -162,9 +214,23 @@ async function openListener() {
     //     port leaves it untouched. The probe alone cannot tell the two
     //     apart - both speak RDP.
     var connsBefore = DevToolsServer._nextConnID;
+    var haveCounter = typeof connsBefore === "number";
+    if (!haveCounter && !counterWarned) {
+      // _nextConnID is DevTools internals (set to 0 by init(), incremented by
+      // _onConnection for every accepted socket). If a future Firefox ESR
+      // renames or removes it the check degrades to the probe alone, which
+      // cannot tell our own listener from another Zotero holding the port -
+      // exactly the case the counter exists to catch. Say so, once, in both
+      // logs, so the degradation is visible instead of silent.
+      counterWarned = true;
+      var why = "DevToolsServer._nextConnID is " + typeof connsBefore
+        + ", not a number: cannot verify that an answering port is served by"
+        + " THIS process. Falling back to the connect-probe alone.";
+      log("WARNING: " + why);
+      crumb("WARNING: " + why);
+    }
     var answered = await probeConnect();
-    var accepted = typeof connsBefore !== "number"   // no counter: trust the probe
-      || DevToolsServer._nextConnID > connsBefore;
+    var accepted = !haveCounter || DevToolsServer._nextConnID > connsBefore;
     if (!answered || !accepted) {
       lastOpenFailure = !answered
         ? "port " + rdpPort + " does not answer (held by another process?)"
@@ -256,9 +322,12 @@ async function checkListener() {
   if (isShuttingDown) return;
   if (rdpListener) {
     var alive = await probeConnect();
-    if (alive || isShuttingDown) return;   // healthy - do NOT touch the listener
+    if (alive || isShuttingDown) {
+      if (alive) markListenerHealthy();
+      return;                              // healthy - do NOT touch the listener
+    }
     log("Health check: port " + rdpPort + " not answering - reopening listener");
-    markListenerDown("stopped answering");
+    markListenerDown("stopped answering", false);
   }
   var ok = await openListener();
   if (ok) {
@@ -267,6 +336,7 @@ async function checkListener() {
   } else {
     log("Health check: reopen failed - " + lastOpenFailure);
     downChecks++;
+    markListenerDown("stopped answering, reopen failed: " + lastOpenFailure, true);
   }
 }
 
@@ -303,6 +373,10 @@ async function startup({ id, version, resourceURI, rootURI }, reason) {
   listenerUp = false;
   downSince = 0;
   downChecks = 0;
+  downLogged = false;
+  flapCount = 0;
+  flapSince = 0;
+  healthyChecks = 0;
 
   try {
     await Zotero.initializationPromise;
@@ -378,7 +452,7 @@ async function startup({ id, version, resourceURI, rootURI }, reason) {
       markListenerUp();
     } else {
       log("Failed to open listener: " + lastOpenFailure);
-      markListenerDown("failed to open at startup: " + lastOpenFailure);
+      markListenerDown("failed to open at startup: " + lastOpenFailure, true);
     }
     // Start the health check UNCONDITIONALLY. The non-destructive check
     // reopens the listener whenever the port stops answering, so a failed

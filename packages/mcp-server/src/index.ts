@@ -44,6 +44,7 @@ import {
   handleOpenPreferences,
 } from "./tools/execute.js";
 import { screenshotTool, handleScreenshot } from "./tools/screenshot.js";
+import { pingTool, handlePing } from "./tools/ping.js";
 import {
   inspectElementTool,
   getDomTreeTool,
@@ -150,71 +151,6 @@ export function getConfig(): Config {
 }
 
 // Ping tool definition
-const pingTool: Tool = {
-  name: "zotero_ping",
-  description:
-    "Test connection to Zotero and get version info. " +
-    "Use this to verify that Zotero is running and the MCP Bridge for Zotero plugin is active.",
-  inputSchema: {
-    type: "object",
-    properties: {},
-    required: [],
-  },
-};
-
-/**
- * Handle the ping tool
- */
-async function handlePing(): Promise<TextContent[]> {
-  try {
-    const client = await getRdpClient();
-
-    // Execute JS to get Zotero version
-    const versionResult = await client.evaluateJS("Zotero.version");
-    const version = await client.gripToValueAsync(versionResult.result);
-
-    // Get app name
-    const appResult = await client.evaluateJS("Zotero.appName");
-    const appName = await client.gripToValueAsync(appResult.result);
-
-    // Get platform
-    const platformResult = await client.evaluateJS("Zotero.platformMajorVersion");
-    const platformVersion = await client.gripToValueAsync(platformResult.result);
-
-    // Get data directory
-    const dataDirResult = await client.evaluateJS("Zotero.DataDirectory.dir");
-    const dataDir = await client.gripToValueAsync(dataDirResult.result);
-
-    return [
-      {
-        type: "text",
-        text:
-          `✓ Connected to ${appName} ${version}\n` +
-          `  Platform: Firefox ${platformVersion}\n` +
-          `  Data directory: ${dataDir}\n` +
-          `  RDP port: ${config.rdp.port}\n\n` +
-          `Ready to help with Zotero plugin development!`,
-      },
-    ];
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return [
-      {
-        type: "text",
-        text:
-          `✗ Cannot connect to Zotero\n\n` +
-          `Error: ${message}\n\n` +
-          `Troubleshooting:\n` +
-          `1. Make sure Zotero is running\n` +
-          `2. Install the MCP Bridge for Zotero plugin in Zotero:\n` +
-          `   Tools → Add-ons → ⚙️ → Install from file\n` +
-          `3. Restart Zotero after installing the plugin\n` +
-          `4. Check that port ${config.rdp.port} is not blocked`,
-      },
-    ];
-  }
-}
-
 // Collect all tools
 const allTools: Tool[] = [
   pingTool,
@@ -273,7 +209,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     switch (name) {
       // Core tools
       case "zotero_ping":
-        content = await handlePing();
+        content = await handlePing(config.rdp.port);
         break;
       case "zotero_execute_js":
         content = await handleExecuteJs(args as Record<string, unknown>);

@@ -12,8 +12,10 @@
  * of "[object Object]" in exactly that state.
  *
  * One probe, JSON round-tripped like every other tool (nested objects do not
- * survive grip resolution), with three outcomes: a string (connected), null
- * (bridge up, Zotero unreachable), or an exception (surfaced verbatim).
+ * survive grip resolution). It always resolves to a JSON string, never to
+ * null: `{reachable: false}` when `Zotero` is not visible from the target,
+ * the version block when it is. An exception on the reply is surfaced
+ * verbatim. See PING_PROBE below for why the null sentinel does not work.
  */
 import type { Tool, TextContent } from "@modelcontextprotocol/sdk/types.js";
 import type { EvaluateJSResponse, GripValue } from "../rdp/index.js";

@@ -2,6 +2,22 @@
 
 All notable changes to MCP Server Zotero Dev will be documented in this file.
 
+## [Plugin 1.0.6] - 2026-09-20
+
+### Fixed
+- **The bridge no longer claims a port it does not serve** ([#19](https://github.com/introfini/mcp-server-zotero-dev/issues/19), [#30](https://github.com/introfini/mcp-server-zotero-dev/pull/30), thanks to @mjthoraval). `openListener()` returned `true` as soon as `SocketListener.open()` resolved, which proves nothing: Mozilla server sockets bind with `SO_REUSEADDR`, so on Windows a second bind succeeds on a port another process already listens on. The plugin logged `SUCCESS - Server listening`, served nothing, and the health check reopened every 10s forever, each time as false as the first. macOS rejects the second bind with `EADDRINUSE`, so the existing `catch` already reported it there; the verification makes both platforms behave the same and covers every other way a listener can come up without serving.
+
+  `openListener()` now settles its own result with two checks: the same client-side probe the health check uses (something on the port answers with the RDP intro), and `DevToolsServer`'s connection counter advancing across that probe, which proves it was *our* server that accepted it. An intro sent by another Zotero holding the port leaves the counter untouched, and the probe alone cannot tell the two apart. On failure the listener is closed and the reason (`does not answer` / `is served by another process` / `open() failed`) is kept and quoted by the startup log and the health check.
+- **A missing DevTools connection counter is now reported instead of silently weakening the check.** `_nextConnID` is DevTools internals; if a future Firefox ESR renames it the verification degrades to the probe alone, which cannot detect a second Zotero on the port. The plugin now says so once, in both logs. One to re-check for Zotero 11 ([#27](https://github.com/introfini/mcp-server-zotero-dev/issues/27)).
+
+### Added
+- **Persistent lifecycle breadcrumbs** in `<profile>/mcp-rdp-events.log` ([#18](https://github.com/introfini/mcp-server-zotero-dev/pull/18), thanks to @mjthoraval). `log()` writes to `dump()`, lost unless Zotero was started from a console, and to `Zotero.debug()`, a no-op unless debug output is enabled, so a bridge that failed at boot left no durable trace at all: the MCP client said `Cannot connect to Zotero RDP` and nothing said whether Zotero was down, the plugin disabled, or the port held by someone else.
+
+  One line per lifecycle **transition**: `startup`, `listener OPEN`, `listener DOWN` with the reason, `listener RECOVERED` with the failed-check count and the seconds down, `shutdown`. Nothing is written per health-check tick, and no failure mode grows the file without bound: an outage costs two lines however long it lasts, and a listener that keeps dying and coming straight back costs one `FLAPPING` line and one `STEADY` line for the whole run, with the flaps counted in between. A healthy session writes three lines. A `startup` with no `shutdown` before it means Zotero was killed rather than exiting cleanly.
+
+### Docs
+- README: new **Checking what the bridge did** section under *Changing the RDP Port*, with a sample log and what each line means.
+
 ## [1.1.3] - 2026-08-17
 
 ### Fixed

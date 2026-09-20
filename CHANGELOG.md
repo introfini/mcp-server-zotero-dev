@@ -2,6 +2,19 @@
 
 All notable changes to MCP Server Zotero Dev will be documented in this file.
 
+## [1.1.4] - 2026-09-20
+
+### Fixed
+- **`zotero_ping` printed a success banner when Zotero was unreachable** ([#24](https://github.com/introfini/mcp-server-zotero-dev/issues/24), [#31](https://github.com/introfini/mcp-server-zotero-dev/pull/31), thanks to @mjthoraval). `getTarget` on the parent `ProcessDescriptor` hands back the main window's global only while a Zotero window exists. Running windowless (on macOS the app stays in the Dock after the last window is closed) the target degrades to an empty `about:blank` frame where `typeof Zotero` is `"undefined"` and every tool fails with `Zotero is not defined`. The handler never looked at `.exception` on its four evals, so in exactly that state it reported `✓ Connected to [object Object] [object Object]` and told the user it was ready.
+
+  The tool moved to `src/tools/ping.ts` and now sends one JSON round-tripped probe instead of four raw reads, with three outcomes handled: an exception throws so the existing `✗ Cannot connect` branch prints it, an unreachable Zotero gets a dedicated `✗ Bridge reachable on port N, but Zotero is not` naming the state and how to leave it, and a reachable one builds the same banner as before from parsed JSON rather than from resolved grips. Reachability depends on an open window, not on the Zotero process, so a readiness check that only tests whether the port accepts a TCP connection cannot tell the two apart.
+
+### Added
+- **First tests in the tree.** `packages/mcp-server/tests/ping.test.mts` covers the three reply shapes a real Zotero produces, the `{type:"null"}` grip that `gripToValue` hands through as an object, and a live round trip that skips (with a warning) when no Zotero answers. `npm test` exits 0 instead of `No test files found`.
+
+### Docs
+- ARCHITECTURE.md: new **A Zotero window must be open** section next to the actor-hierarchy walkthrough, explaining why the RDP handshake succeeding says nothing about `Zotero` resolving.
+
 ## [Plugin 1.0.6] - 2026-09-20
 
 ### Fixed

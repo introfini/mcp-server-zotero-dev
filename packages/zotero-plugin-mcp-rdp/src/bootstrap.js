@@ -27,6 +27,63 @@ function log(msg) {
   } catch (e) {}
 }
 
+// Persistent lifecycle breadcrumbs.
+//
+// log() above goes to dump() -- lost unless Zotero was started from a console
+// -- and to Zotero.debug(), which is a no-op unless the user has debug output
+// enabled. So a bridge that fails at boot leaves NO durable trace: all the
+// user sees is "Cannot connect to Zotero RDP" from their MCP client, with no
+// way to tell whether Zotero was down, the plugin was disabled, or something
+// else held the port.
+//
+// One line per lifecycle TRANSITION in <profile>/mcp-rdp-events.log:
+// startup, listener open / down / recovered, shutdown. Never one line per
+// health-check tick: a bridge stuck behind a foreign port holder would
+// otherwise write two lines every 10s (about 1 MB a day), in exactly the
+// scenario the file exists for. The file survives restarts and is readable
+// without Zotero running.
+function crumb(msg) {
+  try {
+    var f = PathUtils.join(PathUtils.profileDir, "mcp-rdp-events.log");
+    // IOUtils.writeUTF8 does not throw on a failed write - it REJECTS - so the
+    // try/catch around it never sees one; the .catch() does.
+    IOUtils.writeUTF8(f, new Date().toISOString() + " " + msg + "\n",
+      { mode: "appendOrCreate" })
+      .catch(function (e) { log("crumb failed: " + e); });
+  } catch (e) {
+    try { log("crumb failed: " + e); } catch (e2) {}
+  }
+}
+
+// Listener state as the breadcrumbs know it. A crumb is written only when it
+// FLIPS; failed reopen attempts while down are counted, not logged, and the
+// count and duration go into the recovery line.
+var listenerUp = false;
+var downSince = 0;
+var downChecks = 0;
+
+function markListenerDown(why) {
+  if (!listenerUp && downSince) return;   // already down: stay quiet
+  listenerUp = false;
+  downSince = Date.now();
+  downChecks = 0;
+  crumb("listener DOWN on port " + rdpPort + " - " + why);
+}
+
+function markListenerUp() {
+  if (listenerUp) return;
+  if (downSince) {
+    var secs = Math.round((Date.now() - downSince) / 1000);
+    crumb("listener RECOVERED on port " + rdpPort + " after " + downChecks
+      + " failed check" + (downChecks === 1 ? "" : "s") + ", " + secs + "s down");
+  } else {
+    crumb("listener OPEN on port " + rdpPort);
+  }
+  listenerUp = true;
+  downSince = 0;
+  downChecks = 0;
+}
+
 // Initialize or reinitialize the DevTools stack
 function initDevToolsStack() {
   try {
@@ -201,10 +258,16 @@ async function checkListener() {
     var alive = await probeConnect();
     if (alive || isShuttingDown) return;   // healthy - do NOT touch the listener
     log("Health check: port " + rdpPort + " not answering - reopening listener");
+    markListenerDown("stopped answering");
   }
   var ok = await openListener();
-  if (ok) log("Listener (re)opened by health check");
-  else log("Health check: reopen failed - " + lastOpenFailure);
+  if (ok) {
+    log("Listener (re)opened by health check");
+    markListenerUp();
+  } else {
+    log("Health check: reopen failed - " + lastOpenFailure);
+    downChecks++;
+  }
 }
 
 function startHealthCheck() {
@@ -235,7 +298,11 @@ function install(data, reason) {
 
 async function startup({ id, version, resourceURI, rootURI }, reason) {
   log("startup() called, reason=" + reason);
+  crumb("startup v" + version + " reason=" + reason);
   isShuttingDown = false;
+  listenerUp = false;
+  downSince = 0;
+  downChecks = 0;
 
   try {
     await Zotero.initializationPromise;
@@ -308,8 +375,10 @@ async function startup({ id, version, resourceURI, rootURI }, reason) {
     var success = await openListener();
     if (success) {
       log("SUCCESS - Server listening on port " + rdpPort);
+      markListenerUp();
     } else {
       log("Failed to open listener: " + lastOpenFailure);
+      markListenerDown("failed to open at startup: " + lastOpenFailure);
     }
     // Start the health check UNCONDITIONALLY. The non-destructive check
     // reopens the listener whenever the port stops answering, so a failed
@@ -322,6 +391,7 @@ async function startup({ id, version, resourceURI, rootURI }, reason) {
     startHealthCheck();
   } catch (e) {
     log("ERROR: " + e);
+    crumb("startup ERROR: " + e);
     if (e.stack) log("Stack: " + e.stack);
     try {
       Zotero.logError(e);
@@ -333,6 +403,7 @@ async function startup({ id, version, resourceURI, rootURI }, reason) {
 
 function shutdown({ id, version, resourceURI, rootURI }, reason) {
   log("shutdown() called, reason=" + reason);
+  crumb("shutdown v" + version + " reason=" + reason);
   isShuttingDown = true;  // Prevent auto-reopen
   stopHealthCheck();
 

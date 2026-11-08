@@ -19,8 +19,10 @@ import {
   codeSkeleton,
   evaluateUserCode,
   isWrapRetryError,
+  decodeWrappedError,
   needsIIFEWrapper,
   nullishGripToValue,
+  WRAPPED_ERROR_PREFIX,
   wrapInIIFE,
   type EvalClient,
 } from "../src/tools/js-wrap.js";
@@ -81,6 +83,21 @@ describe("isWrapRetryError", () => {
     expect(isWrapRetryError("SyntaxError: await is only valid in async functions, async generators and modules")).toBe(true);
     expect(isWrapRetryError("ReferenceError: x is not defined")).toBe(false);
     expect(isWrapRetryError(undefined)).toBe(false);
+  });
+});
+
+describe("errors thrown inside the async wrapper", () => {
+  it("are caught and returned marked, and decoded back", () => {
+    const wrapped = wrapInIIFE("await x();\nreturn 1");
+    expect(wrapped).toContain("catch (__mcpError)");
+    const marked = WRAPPED_ERROR_PREFIX + JSON.stringify({ name: "TypeError", message: "x is not a function", stack: "@debugger eval code:3:7" });
+    expect(decodeWrappedError(marked)).toEqual({ name: "TypeError", message: "x is not a function", stack: "@debugger eval code:3:7" });
+  });
+
+  it("leave every other value alone", () => {
+    expect(decodeWrappedError("Error: just a string")).toBeNull();
+    expect(decodeWrappedError(42)).toBeNull();
+    expect(decodeWrappedError(undefined)).toBeNull();
   });
 });
 
@@ -170,6 +187,19 @@ describe.skipIf(!ready.client)("zotero_execute_js wrapping (live Zotero)", () =>
     const { response } = await evaluateUserCode(client, REPRO);
     expect(response.exceptionMessage).toBeUndefined();
     expect(await client.gripToValueAsync(response.result as GripValue)).toBe(42);
+  });
+
+  it("reports what wrapped async code threw instead of an undefined result", async () => {
+    const { response } = await evaluateUserCode(client, "await null;\nthrow new TypeError('thrown after an await')");
+    const value = await client.gripToValueAsync(response.result as GripValue);
+    expect(decodeWrappedError(value)).toMatchObject({ name: "TypeError", message: "thrown after an await" });
+  });
+
+  it("documents the reply for code it does not wrap: a rejection without its reason", async () => {
+    const { response } = await evaluateUserCode(client, "(async () => { throw new Error('own IIFE') })()");
+    expect(response.topLevelAwaitRejected).toBe(true);
+    expect(response.exceptionMessage).toBeUndefined();
+    expect(response.result).toBeUndefined();
   });
 
   it("runs a return inside a top-level block through the wrapped retry", async () => {

@@ -6,7 +6,7 @@
 
 import type { Tool, TextContent } from "@modelcontextprotocol/sdk/types.js";
 import { getRdpClient } from "../index.js";
-import { evaluateUserCode, nullishGripToValue } from "./js-wrap.js";
+import { decodeWrappedError, evaluateUserCode, nullishGripToValue } from "./js-wrap.js";
 
 /**
  * Detects if a result contains truncated grip values that lost information.
@@ -112,6 +112,22 @@ export async function handleExecuteJs(
   // Wrapped in an IIFE when it needs one; see js-wrap.ts.
   const { response } = await evaluateUserCode(client, code);
 
+  // A promise the code returned (its own async IIFE, say) rejected. Zotero's
+  // reply carries no reason for it (see EvaluateJSResponse); the server's own
+  // async wrapper catches errors itself, so this is code it did not wrap.
+  if (response.topLevelAwaitRejected) {
+    return [
+      {
+        type: "text",
+        text:
+          "Error executing JavaScript:\n\nThe code's promise was rejected. Zotero's reply does " +
+          "not include the reason. To see it, write the code as plain statements with a " +
+          "top-level await or return (the server then wraps it and reports what was thrown), " +
+          "or catch the error yourself and return it.",
+      },
+    ];
+  }
+
   if (response.exception || response.exceptionMessage) {
     const error = response.exceptionMessage || "Unknown error";
     let errorDetail = error;
@@ -154,6 +170,20 @@ export async function handleExecuteJs(
   // printed as JSON; they are read off the raw grip first.
   const nullish = nullishGripToValue(response.result);
   const result = nullish === response.result ? await client.gripToValueAsync(response.result) : nullish;
+
+  // What the server's async wrapper caught (js-wrap.ts wrapInIIFE).
+  const thrown = decodeWrappedError(result);
+  if (thrown) {
+    return [
+      {
+        type: "text",
+        text:
+          `Error executing JavaScript:\n\n${thrown.name}: ${thrown.message}` +
+          (thrown.stack ? `\n\nStack trace:\n${thrown.stack}` : ""),
+      },
+    ];
+  }
+
   let resultText: string;
 
   if (result === undefined) {

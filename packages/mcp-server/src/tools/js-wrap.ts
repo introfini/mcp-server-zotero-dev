@@ -178,12 +178,50 @@ export function needsIIFEWrapper(code: string): boolean {
   return hasTopLevel(skeleton, "return") || hasTopLevel(skeleton, "await");
 }
 
-/** Wraps code in an IIFE: an async one when the code awaits anything. */
+/**
+ * What the async wrapper returns in place of a thrown error: this prefix
+ * (a NUL character no real result starts with) and the error as JSON.
+ */
+export const WRAPPED_ERROR_PREFIX = "\u0000mcp-error:";
+
+/**
+ * Wraps code in an IIFE: an async one when the code awaits anything.
+ *
+ * The async one catches what the code throws and returns it marked
+ * (WRAPPED_ERROR_PREFIX). A rejected promise reaches the client with no
+ * reason at all: the reply only says `topLevelAwaitRejected`, and nothing
+ * lands in the error console either, so `throw` inside async code read as
+ * "Result: undefined" - a failure that looked like success.
+ */
 export function wrapInIIFE(code: string): string {
   if (/\bawait\b/.test(codeSkeleton(code))) {
-    return `(async () => {\n${code}\n})()`;
+    return (
+      `(async () => {\n` +
+      `try {\n` +
+      `return await (async () => {\n${code}\n})();\n` +
+      `} catch (__mcpError) {\n` +
+      `const e = __mcpError;\n` +
+      `return "\\u0000mcp-error:" + JSON.stringify({\n` +
+      `name: (e && e.name) || "Error",\n` +
+      `message: e && e.message !== undefined ? String(e.message) : String(e),\n` +
+      `stack: (e && e.stack) ? String(e.stack) : ""\n` +
+      `});\n` +
+      `}\n` +
+      `})()`
+    );
   }
   return `(() => {\n${code}\n})()`;
+}
+
+/** The error a wrapped evaluation returned (see wrapInIIFE), or null. */
+export function decodeWrappedError(value: unknown): { name: string; message: string; stack: string } | null {
+  if (typeof value !== "string" || !value.startsWith(WRAPPED_ERROR_PREFIX)) return null;
+  try {
+    const e = JSON.parse(value.slice(WRAPPED_ERROR_PREFIX.length)) as { name?: string; message?: string; stack?: string };
+    return { name: e.name || "Error", message: e.message ?? "", stack: e.stack ?? "" };
+  } catch {
+    return { name: "Error", message: value.slice(WRAPPED_ERROR_PREFIX.length), stack: "" };
+  }
 }
 
 /**

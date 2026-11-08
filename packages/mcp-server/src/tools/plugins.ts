@@ -7,6 +7,7 @@
 import type { Tool, TextContent } from "@modelcontextprotocol/sdk/types.js";
 import { getRdpClient } from "../index.js";
 import { existsSync } from "node:fs";
+import { installWithClient } from "./plugin-install.js";
 
 // Tool definitions
 export const pluginReloadTool: Tool = {
@@ -42,13 +43,21 @@ export const pluginInstallTool: Tool = {
   name: "zotero_plugin_install",
   description:
     "Install a Zotero plugin from a local XPI file. " +
-    "The plugin will be installed and Zotero may need to be restarted.",
+    "The plugin will be installed and Zotero may need to be restarted. " +
+    "The result names the profile it went into.",
   inputSchema: {
     type: "object",
     properties: {
       path: {
         type: "string",
         description: "Path to the XPI file to install",
+      },
+      profile: {
+        type: "string",
+        description:
+          "Install only if the running Zotero's profile directory contains this text " +
+          "(e.g. the profile's name); refuse otherwise. Use it whenever several Zotero " +
+          "instances or profiles exist: the bridge answers for whichever one is running.",
       },
     },
     required: ["path"],
@@ -267,94 +276,13 @@ export async function handlePluginInstall(
     throw new Error("File must have .xpi extension");
   }
 
+  const profileGuard = typeof args.profile === "string" && args.profile.trim() ? args.profile.trim() : undefined;
+
   const client = await getRdpClient();
 
   // We need to pass the file path to Zotero
   // Zotero can install from file:// URLs
   const fileUrl = `file://${xpiPath.replace(/\\/g, "/")}`;
 
-  // Return as JSON string to avoid RDP preview limitations with nested objects
-  const code = `
-    (async () => {
-      try {
-        const { AddonManager } = ChromeUtils.importESModule(
-          "resource://gre/modules/AddonManager.sys.mjs"
-        );
-
-        const xpiUrl = ${JSON.stringify(fileUrl)};
-
-        // Create install
-        const install = await AddonManager.getInstallForURL(xpiUrl, {
-          telemetryInfo: { source: "mcp-server" }
-        });
-
-        if (!install) {
-          return JSON.stringify({ error: "Failed to create install object" });
-        }
-
-        // Install the addon
-        await install.install();
-
-        const addon = install.addon;
-        if (!addon) {
-          return JSON.stringify({ error: "Installation completed but addon not found" });
-        }
-
-        return JSON.stringify({
-          success: true,
-          plugin: {
-            id: addon.id,
-            name: addon.name,
-            version: addon.version,
-            requiresRestart: addon.pendingOperations > 0
-          }
-        });
-      } catch (error) {
-        return JSON.stringify({ error: error.message || String(error) });
-      }
-    })()
-  `;
-
-  const response = await client.evaluateJS(code);
-
-  if (response.exception) {
-    throw new Error(`Plugin installation failed: ${response.exceptionMessage}`);
-  }
-
-  // Use async method to handle longString grips
-  const jsonString = await client.gripToValueAsync(response.result);
-  if (jsonString === undefined || jsonString === null) {
-    throw new Error("Plugin installation failed: received undefined result from Zotero");
-  }
-
-  const result = JSON.parse(String(jsonString)) as {
-    success?: boolean;
-    plugin?: {
-      id: string;
-      name: string;
-      version: string;
-      requiresRestart: boolean;
-    };
-    error?: string;
-  };
-
-  if (result.error) {
-    throw new Error(result.error);
-  }
-
-  const restartNote = result.plugin?.requiresRestart
-    ? "\n\n⚠️ Zotero may need to be restarted for the plugin to take effect."
-    : "";
-
-  return [
-    {
-      type: "text",
-      text:
-        `✓ Plugin installed successfully\n\n` +
-        `Name: ${result.plugin?.name}\n` +
-        `ID: ${result.plugin?.id}\n` +
-        `Version: ${result.plugin?.version}` +
-        restartNote,
-    },
-  ];
+  return installWithClient(client, fileUrl, profileGuard);
 }

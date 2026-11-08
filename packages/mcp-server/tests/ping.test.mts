@@ -53,12 +53,14 @@ describe("zotero_ping (unit, fake RDP replies)", () => {
         appName: "Zotero",
         platformVersion: 140,
         dataDir: "D:\\Users\\example\\Zotero",
+        profileDir: "D:\\Users\\example\\Profiles\\abcd1234.dev",
       }) as unknown as GripValue,
     };
     const text = textOf(await pingWithClient(fakeClient(reply), 6100));
     expect(text).toMatch(/^✓ Connected to Zotero 10\.0\.3-beta\.2\+80bc5565e\n/);
     expect(text).toContain("Platform: Firefox 140");
     expect(text).toContain("Data directory: D:\\Users\\example\\Zotero");
+    expect(text).toContain("Profile: D:\\Users\\example\\Profiles\\abcd1234.dev");
     expect(text).toContain("RDP port: 6100");
     expect(text).not.toContain("[object Object]");
   });
@@ -139,6 +141,7 @@ describe.skipIf(!ready.client)("zotero_ping (live Zotero)", () => {
   it("round-trips the probe against the running Zotero", async () => {
     const text = textOf(await pingWithClient(client, RDP_PORT));
     expect(text).toMatch(/^✓ Connected to Zotero \d+\.\d+/);
+    expect(text).toMatch(/\n {2}Profile: \S/);
     expect(text).toContain(`RDP port: ${RDP_PORT}`);
     expect(text).not.toContain("[object Object]");
   });

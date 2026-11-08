@@ -6,77 +6,7 @@
 
 import type { Tool, TextContent } from "@modelcontextprotocol/sdk/types.js";
 import { getRdpClient } from "../index.js";
-
-// ─────────────────────────────────────────────────────────────────────────────
-// IIFE Wrapping Helpers
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * Detects if code contains top-level return statements that require IIFE wrapping.
- * Uses a simplified approach: track brace depth and look for 'return' at depth 0.
- *
- * Note: This is a heuristic. The fallback retry mechanism in handleExecuteJs
- * catches cases where detection fails.
- */
-function needsIIFEWrapper(code: string): boolean {
-  // Quick check - if no 'return' keyword, definitely doesn't need wrapping
-  if (!/\breturn\b/.test(code)) {
-    return false;
-  }
-
-  // Remove string literals to avoid false positives (handles escaped quotes)
-  let cleaned = code;
-
-  // Remove template literals (handle nested ${})
-  cleaned = cleaned.replace(/`(?:[^`\\]|\\.)*`/g, "``");
-
-  // Remove double-quoted strings
-  cleaned = cleaned.replace(/"(?:[^"\\]|\\.)*"/g, '""');
-
-  // Remove single-quoted strings
-  cleaned = cleaned.replace(/'(?:[^'\\]|\\.)*'/g, "''");
-
-  // Remove comments
-  cleaned = cleaned.replace(/\/\/[^\n]*/g, ""); // single-line
-  cleaned = cleaned.replace(/\/\*[\s\S]*?\*\//g, ""); // multi-line
-
-  // Track brace depth to find top-level returns
-  // We process character-by-character, checking for 'return' when braceDepth is 0
-  let braceDepth = 0;
-
-  // Use regex to find all potential return statements with word boundaries
-  const returnRegex = /\breturn\b/g;
-  let match;
-
-  while ((match = returnRegex.exec(cleaned)) !== null) {
-    const pos = match.index;
-
-    // Calculate brace depth up to this position
-    braceDepth = 0;
-    for (let i = 0; i < pos; i++) {
-      if (cleaned[i] === "{") braceDepth++;
-      else if (cleaned[i] === "}") braceDepth = Math.max(0, braceDepth - 1);
-    }
-
-    // If brace depth is 0, this is a top-level return
-    if (braceDepth === 0) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-/**
- * Wraps code in an IIFE. Uses async IIFE if code contains 'await'.
- */
-function wrapInIIFE(code: string): string {
-  const hasAwait = /\bawait\s/.test(code);
-  if (hasAwait) {
-    return `(async () => {\n${code}\n})()`;
-  }
-  return `(() => {\n${code}\n})()`;
-}
+import { evaluateUserCode, nullishGripToValue } from "./js-wrap.js";
 
 /**
  * Detects if a result contains truncated grip values that lost information.
@@ -171,31 +101,16 @@ export const setPrefTool: Tool = {
 export async function handleExecuteJs(
   args: Record<string, unknown>
 ): Promise<TextContent[]> {
-  let code = args.code as string;
+  const code = args.code as string;
 
   if (!code || typeof code !== "string") {
     throw new Error("Missing required parameter: code");
   }
 
   const client = await getRdpClient();
-  const originalCode = code;
 
-  // Auto-wrap in IIFE if code has top-level return statements
-  if (needsIIFEWrapper(code)) {
-    code = wrapInIIFE(code);
-  }
-
-  let response = await client.evaluateJS(code);
-
-  // Fallback: if detection failed and we get "return not in function" error,
-  // wrap the original code and retry
-  if (
-    response.exceptionMessage?.includes("return not in function") &&
-    code === originalCode // Only retry if we didn't already wrap
-  ) {
-    code = wrapInIIFE(originalCode);
-    response = await client.evaluateJS(code);
-  }
+  // Wrapped in an IIFE when it needs one; see js-wrap.ts.
+  const { response } = await evaluateUserCode(client, code);
 
   if (response.exception || response.exceptionMessage) {
     const error = response.exceptionMessage || "Unknown error";
@@ -234,8 +149,11 @@ export async function handleExecuteJs(
     ];
   }
 
-  // Use async method to handle longString grips
-  const result = await client.gripToValueAsync(response.result);
+  // Use async method to handle longString grips. gripToValue() hands the
+  // undefined and null grips through as objects ({type: "undefined"}), which
+  // printed as JSON; they are read off the raw grip first.
+  const nullish = nullishGripToValue(response.result);
+  const result = nullish === response.result ? await client.gripToValueAsync(response.result) : nullish;
   let resultText: string;
 
   if (result === undefined) {

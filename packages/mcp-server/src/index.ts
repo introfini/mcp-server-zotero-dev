@@ -58,8 +58,10 @@ import {
 import {
   clickElementTool,
   sendKeysTool,
+  pressKeysTool,
   handleClickElement,
   handleSendKeys,
+  handlePressKeys,
 } from "./tools/interact.js";
 import {
   readLogsTool,
@@ -167,6 +169,7 @@ const allTools: Tool[] = [
   listWindowsTool,
   clickElementTool,
   sendKeysTool,
+  pressKeysTool,
   readLogsTool,
   readErrorsTool,
   clearLogsTool,
@@ -255,6 +258,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         break;
       case "zotero_send_keys":
         content = await handleSendKeys(args as Record<string, unknown>);
+        break;
+      case "zotero_press_keys":
+        content = await handlePressKeys(args as Record<string, unknown>);
         break;
 
       // Logging tools

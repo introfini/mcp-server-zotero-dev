@@ -80,6 +80,9 @@ export class RDPClient extends EventEmitter {
   private consecutiveFailures = 0;
   private keepaliveTimer: NodeJS.Timeout | null = null;
   private isKeepaliveEnabled = true;
+  // The connection attempt in flight, shared by every caller that arrives
+  // before it settles (see connect()).
+  private connecting: Promise<void> | null = null;
 
   constructor(options: Partial<RDPClientOptions> = {}) {
     super();
@@ -93,12 +96,28 @@ export class RDPClient extends EventEmitter {
    * The server sends an intro packet immediately after connection
    * containing applicationType and traits. We capture this to initialize
    * the root state.
+   *
+   * Concurrent callers share one attempt. MCP clients often send several tool
+   * calls at once as their first action; each reaches here while
+   * isConnected() is still false, and without this guard each opened its own
+   * socket on this client and raced the intro packet, so every call failed.
    */
   async connect(): Promise<void> {
     if (this.state.connected && this.socket) {
       return;
     }
+    if (!this.connecting) {
+      this.connecting = this.openConnection().finally(() => {
+        this.connecting = null;
+      });
+    }
+    return this.connecting;
+  }
 
+  /**
+   * Open the socket and wait for the intro packet. Only connect() calls this.
+   */
+  private openConnection(): Promise<void> {
     return new Promise((resolve, reject) => {
       let introReceived = false;
 
@@ -148,7 +167,22 @@ export class RDPClient extends EventEmitter {
         this.removeListener("message", handleIntro);
         this.handleError(err, reject);
       });
-      this.socket.on("close", () => this.handleClose());
+      this.socket.on("close", () => {
+        // A close before the intro packet (bridge restarting, disconnect() or
+        // a socket timeout mid-handshake) must fail this attempt, or the
+        // attempt connect() shares would never settle and every later call
+        // would wait on it.
+        if (!introReceived) {
+          this.removeListener("message", handleIntro);
+          reject(
+            new Error(
+              `Connection to Zotero RDP at ${this.options.host}:${this.options.port} ` +
+                "closed before Zotero answered. Ensure the MCP Bridge for Zotero plugin is enabled, then retry."
+            )
+          );
+        }
+        this.handleClose();
+      });
       this.socket.on("timeout", () => this.handleTimeout());
 
       this.socket.setTimeout(this.options.timeout);

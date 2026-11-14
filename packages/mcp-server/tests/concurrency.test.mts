@@ -90,3 +90,23 @@ describe("connect() when nothing answers (no Zotero needed)", () => {
     client.disconnect();
   });
 });
+
+describe.skipIf(Boolean(notReady))("replies that complete out of order (live Zotero)", () => {
+  it("gives each evaluation its own result when a slow one was sent first", async () => {
+    const client = createClient({ port: RDP_PORT });
+    try {
+      await client.connect();
+      // Warm up: find the console actor before the race we want to test.
+      await client.evaluateJS("1");
+      const slow = client.evaluateJS(
+        `(async () => { await new Promise(r => setTimeout(r, 300)); return "slow"; })()`
+      );
+      const fast = client.evaluateJS(`"fast"`);
+      const [s, f] = await Promise.all([slow, fast]);
+      expect(await client.gripToValueAsync(s.result as GripValue)).toBe("slow");
+      expect(await client.gripToValueAsync(f.result as GripValue)).toBe("fast");
+    } finally {
+      client.disconnect();
+    }
+  });
+});

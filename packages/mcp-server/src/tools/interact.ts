@@ -16,6 +16,14 @@
  * best-effort fallback and some native/XUL handlers deliberately ignore
  * untrusted events, so they may not trigger native behaviour.
  *
+ * Keys can be trusted: zotero_press_keys goes through nsITextInputProcessor,
+ * the interface Firefox's own test harness types with, and its events carry
+ * isTrusted === true, so XUL <key> shortcuts (Ctrl+Shift+F, ...) fire and
+ * fields react as to real typing (verified on Zotero 11.0-beta.3 / Firefox 153,
+ * window in the background included). Mouse events cannot be: Firefox 153 has
+ * no windowUtils.sendMouseEvent any more, and sendNativeMouseEvent drives the
+ * real OS cursor, which a tool must not take over.
+ *
  * Caveat: a NATIVE modal dialog (Services.prompt.confirmEx and friends) spins a
  * nested modal event loop that blocks the main thread evaluateJS runs on, so
  * these tools cannot reliably dismiss a *blocking* modal. They target in-window
@@ -24,7 +32,7 @@
  */
 
 import type { Tool, TextContent } from "@modelcontextprotocol/sdk/types.js";
-import { getRdpClient } from "../index.js";
+import { parseKeyCombo, type KeyCombo } from "./keys.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared helper: resolve the target window inside the evaluated snippet.
@@ -158,6 +166,42 @@ export const sendKeysTool: Tool = {
   },
 };
 
+export const pressKeysTool: Tool = {
+  name: "zotero_press_keys",
+  description:
+    "Type text and press keys in a Zotero window as a user would: the events are " +
+    "TRUSTED (isTrusted=true), so keyboard shortcuts defined in Zotero's windows " +
+    "fire (e.g. 'Accel+Shift+F'), and fields react as to real typing. Text is typed " +
+    "first, then each key combination is pressed in order. If a selector is given, " +
+    "that element is focused first (light DOM, then open shadow roots). Like the " +
+    "other UI tools it cannot get past a BLOCKING native modal dialog that a key " +
+    "may open (see the module note).",
+  inputSchema: {
+    type: "object",
+    properties: {
+      keys: {
+        description:
+          "A key combination or a list of them, pressed in order: 'Enter', 'Escape', " +
+          "'Ctrl+Shift+F', 'Accel+W' (Accel = Cmd on macOS, Ctrl elsewhere), 'ArrowDown', " +
+          "'F2', 'Shift+Tab'. Modifiers: Ctrl, Shift, Alt, Meta/Cmd, Accel.",
+        oneOf: [{ type: "string" }, { type: "array", items: { type: "string" } }],
+      },
+      text: {
+        type: "string",
+        description: "Text to type, one key per character, before the keys are pressed",
+      },
+      selector: {
+        type: "string",
+        description: "CSS selector of the element to focus first (optional; else the focused element)",
+      },
+      windowId: {
+        type: "number",
+        description: "Window outerWindowID (optional, defaults to main window)",
+      },
+    },
+  },
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Tool handlers
 // ─────────────────────────────────────────────────────────────────────────────
@@ -173,6 +217,8 @@ export async function handleClickElement(
     throw new Error("Missing required parameter: selector");
   }
 
+  // Imported lazily so tests can load this module without starting the server (#33).
+  const { getRdpClient } = await import("../index.js");
   const client = await getRdpClient();
 
   const code = `
@@ -260,6 +306,8 @@ export async function handleSendKeys(
     throw new Error("Missing required parameter: text");
   }
 
+  // Imported lazily so tests can load this module without starting the server (#33).
+  const { getRdpClient } = await import("../index.js");
   const client = await getRdpClient();
 
   const code = `
@@ -349,4 +397,112 @@ export async function handleSendKeys(
   return [
     { type: "text", text: `Typed into ${where}${enterPart}.${valuePart}` },
   ];
+}
+
+/** The in-window code for zotero_press_keys; exported for tests. */
+export function pressKeysCode(
+  combos: KeyCombo[],
+  text: string | undefined,
+  selector: string | undefined,
+  windowId: number | undefined
+): string {
+  return `
+    (() => {
+      let win;
+      ${windowResolver(windowId)}
+      ${selector ? DEEP_QUERY_HELPER : ""}
+
+      try { win.focus(); } catch (e) {}
+      ${
+        selector
+          ? `
+        const target = __deepQueryAll(win.document, ${JSON.stringify(selector)})[0];
+        if (!target) return JSON.stringify({ error: "Element not found: " + ${JSON.stringify(selector)} });
+        try { target.focus(); } catch (e) {}
+      `
+          : ""
+      }
+
+      const tip = Cc["@mozilla.org/text-input-processor;1"].createInstance(Ci.nsITextInputProcessor);
+      if (!tip.beginInputTransactionForTests(win)) {
+        return JSON.stringify({ error: "Could not start keyboard input in this window (another input transaction is active)" });
+      }
+      const isMac = Services.appinfo.OS === "Darwin";
+      const MOD = {
+        Control: ["Control", "ControlLeft", 17],
+        Shift: ["Shift", "ShiftLeft", 16],
+        Alt: ["Alt", "AltLeft", 18],
+        Meta: ["Meta", "MetaLeft", 91],
+      };
+      const ev = (key, code, keyCode) => new win.KeyboardEvent("", { key, code, keyCode });
+
+      const text = ${JSON.stringify(text ?? "")};
+      for (const ch of text) {
+        tip.keydown(ev(ch, "", 0));
+        tip.keyup(ev(ch, "", 0));
+      }
+      const combos = ${JSON.stringify(combos)};
+      for (const c of combos) {
+        const mods = c.modifiers.map((m) => (m === "Accel" ? (isMac ? "Meta" : "Control") : m));
+        for (const m of mods) tip.keydown(ev(...MOD[m]));
+        tip.keydown(ev(c.key.key, c.key.code, c.key.keyCode));
+        tip.keyup(ev(c.key.key, c.key.code, c.key.keyCode));
+        for (const m of mods.slice().reverse()) tip.keyup(ev(...MOD[m]));
+      }
+
+      const active = win.document.activeElement;
+      return JSON.stringify({
+        ok: true,
+        typed: [...text].length,
+        pressed: combos.length,
+        active: active ? { tagName: active.tagName.toLowerCase(), id: active.id || null } : null
+      });
+    })()
+  `;
+}
+
+export async function handlePressKeys(
+  args: Record<string, unknown>
+): Promise<TextContent[]> {
+  const rawKeys = args.keys;
+  const keyList =
+    rawKeys === undefined ? [] : Array.isArray(rawKeys) ? rawKeys.map(String) : [String(rawKeys)];
+  const text = typeof args.text === "string" ? args.text : undefined;
+  const selector = args.selector as string | undefined;
+  const windowId = args.windowId as number | undefined;
+
+  if (!keyList.length && !text) {
+    throw new Error("Nothing to press: give keys (e.g. 'Enter', 'Ctrl+Shift+F') and/or text");
+  }
+  const combos = keyList.map(parseKeyCombo);
+
+  // Imported lazily so tests can load this module without starting the server (#33).
+  const { getRdpClient } = await import("../index.js");
+  const client = await getRdpClient();
+  const response = await client.evaluateJS(pressKeysCode(combos, text, selector, windowId));
+  if (response.exception) {
+    throw new Error(`Press keys failed: ${response.exceptionMessage}`);
+  }
+
+  const jsonString = await client.gripToValueAsync(response.result);
+  if (jsonString === undefined || jsonString === null) {
+    throw new Error("Press keys failed: received undefined result from Zotero");
+  }
+
+  const result = JSON.parse(String(jsonString)) as {
+    ok?: boolean;
+    typed?: number;
+    pressed?: number;
+    active?: { tagName: string; id: string | null } | null;
+    error?: string;
+  };
+  if (result.error) {
+    throw new Error(result.error);
+  }
+
+  const parts: string[] = [];
+  if (result.typed) parts.push(`typed ${result.typed} character(s)`);
+  if (result.pressed) parts.push(`pressed ${keyList.join(", ")}`);
+  const focus = result.active ? ` Focus now on <${result.active.tagName}${result.active.id ? `#${result.active.id}` : ""}>.` : "";
+  return [{ type: "text", text: `Trusted keys: ${parts.join(", then ")}.${focus}` }];
 }

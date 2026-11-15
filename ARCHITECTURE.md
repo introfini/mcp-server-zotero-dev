@@ -381,6 +381,23 @@ Services.prefs.setBoolPref("devtools.debugger.prompt-connection", false);
 
 **Solution:** Use `listProcesses` → `getTarget` flow instead
 
+### 7. A blocking modal dialog holds every evaluation result
+
+**Problem:** An evaluation that opens a native modal dialog (`Services.prompt.confirmEx`, `window.alert`, a modal `window.openDialog`, ...) does not return until the dialog is closed, and neither does any evaluation sent while it is up.
+
+**Why:** In Zotero every prompt is a separate window-modal `commonDialog.xhtml` window. Zotero has no `gDialogBox` and no `Prompt` JSWindowActor, so Prompter's `openPrompt()` falls back to `openWindowPrompt()`, which calls `Services.ww.openWindow(..., "modal")`. That spins a nested event loop on the main thread. Measured inside that loop on Zotero 11.0-beta.4 (Firefox 153) and 10.0.8 (Firefox 140):
+
+| Runs inside the nested loop | Does not run until the dialog closes |
+|---|---|
+| observer notifications (`common-dialog-loaded`, `domwindowopened`) | promise reactions (microtasks) |
+| `Services.tm.dispatchToMainThread` runnables | `setTimeout` of the window that opened the dialog (a modal suspends its opener) |
+| nsITimer callbacks, e.g. `Timer.sys.mjs` `setTimeout` | |
+| incoming RDP packets: a new connection gets its intro and actors, and an evaluation's synchronous part runs | |
+
+The console actor emits each evaluation's result from a promise continuation, so results are held, not lost: they all arrive once the dialog closes.
+
+**Solution:** Answer the dialog from code that is already in place when it opens. `zotero_handle_dialog` registers an observer for `common-dialog-loaded` (subject: the dialog window, whose `Dialog` global holds the arguments and buttons) and `domwindowopened` (modal windows that are not prompts), and presses the button from a runnable, never from a promise or the opener's timers.
+
 ---
 
 ## Testing & Debugging

@@ -16,11 +16,13 @@
  * best-effort fallback and some native/XUL handlers deliberately ignore
  * untrusted events, so they may not trigger native behaviour.
  *
- * Caveat: a NATIVE modal dialog (Services.prompt.confirmEx and friends) spins a
- * nested modal event loop that blocks the main thread evaluateJS runs on, so
- * these tools cannot reliably dismiss a *blocking* modal. They target in-window
- * elements and non-modal windows. Dismissing blocking native dialogs needs a
- * different mechanism and is intentionally out of scope here.
+ * Caveat: a NATIVE modal dialog (Services.prompt.confirmEx and friends, or a
+ * modal window.openDialog) spins a nested event loop on the main thread, so a
+ * click that opens one only returns once the dialog is closed, and no later
+ * call of these tools can answer it in between. To answer such a dialog, arm
+ * zotero_handle_dialog BEFORE the click (tools/dialog.ts): it presses the
+ * chosen button as the dialog loads. These tools themselves target in-window
+ * elements and non-modal windows.
  */
 
 import type { Tool, TextContent } from "@modelcontextprotocol/sdk/types.js";
@@ -81,8 +83,9 @@ export const clickElementTool: Tool = {
     "default calls element.click() (which fires the XUL command for " +
     "buttons/menuitems); set mouseEvents=true to dispatch a synthesized " +
     "mousedown/mouseup/click sequence for content that needs real mouse events. " +
-    "Cannot dismiss a BLOCKING native modal dialog (Services.prompt.confirmEx) — " +
-    "see the module note.",
+    "If the click opens a BLOCKING native modal dialog (Services.prompt.confirmEx " +
+    "and friends), arm zotero_handle_dialog first: the click only returns once " +
+    "that dialog is closed.",
   inputSchema: {
     type: "object",
     properties: {

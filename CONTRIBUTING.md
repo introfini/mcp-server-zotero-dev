@@ -60,7 +60,7 @@ Four things generalise to any new test file:
 
 **Skip, do not fail, when Zotero is absent.** Guard the suite with `describe.skipIf` so `npm test` stays green on a machine without Zotero. Probe the `Zotero` global itself, with `evaluateJSAsync("typeof Zotero")`, rather than checking that port 6100 accepts a TCP connection: a Zotero running with no window open keeps the port listening while every tool fails with `Zotero is not defined`.
 
-**Tests are currently neither typechecked nor linted.** `tsconfig.json` has `include: ["src/**/*"]` and lint runs `eslint src --ext .ts`. Keeping tests out of the published `dist/` is deliberate; wiring them into a separate `tsconfig.test.json` is open work. Until then, type errors in a test file will not be caught by `npm run typecheck`.
+**Tests are typechecked and linted with the source.** `npm run typecheck` runs `tsc` twice: once on `tsconfig.json` (`src/` only, so nothing under `tests/` lands in the published `dist/`) and once on `tsconfig.test.json`, which extends it for `tests/` with `noEmit`. `npm run lint` covers `src` and `tests`, `.ts` and `.mts`.
 
 ## Code conventions
 

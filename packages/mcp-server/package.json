@@ -15,9 +15,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "lint": "eslint src --ext .ts",
-    "lint:fix": "eslint src --ext .ts --fix",
-    "typecheck": "tsc --noEmit",
+    "lint": "eslint src tests --ext .ts,.mts",
+    "lint:fix": "eslint src tests --ext .ts,.mts --fix",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
     "clean": "rm -rf dist"
   },
   "keywords": [

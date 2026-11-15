@@ -139,6 +139,17 @@ export class RDPClient extends EventEmitter {
             applicationType: message.applicationType as string,
             traits: (message.traits as Record<string, boolean>) || {},
           };
+          // Connected means the handshake is done, not that TCP is up. A call
+          // that saw isConnected() between the two skipped the shared attempt
+          // and sent to root, and the intro (also from root) answered that
+          // request instead of reaching this handler.
+          this.state.connected = true;
+          this.reconnectAttempts = 0;
+          this.consecutiveFailures = 0;
+          this.lastSuccessfulOperation = Date.now();
+          // Start background health checks
+          this.startKeepalive();
+          this.emit("connected");
           this.removeListener("message", handleIntro);
           resolve();
         }
@@ -147,22 +158,10 @@ export class RDPClient extends EventEmitter {
       // Listen for the intro packet
       this.on("message", handleIntro);
 
-      this.socket = createConnection(
-        {
-          host: this.options.host,
-          port: this.options.port,
-        },
-        () => {
-          this.state.connected = true;
-          this.reconnectAttempts = 0;
-          this.consecutiveFailures = 0;
-          this.lastSuccessfulOperation = Date.now();
-          // Start background health checks
-          this.startKeepalive();
-          this.emit("connected");
-          // Don't resolve here - wait for intro packet
-        }
-      );
+      this.socket = createConnection({
+        host: this.options.host,
+        port: this.options.port,
+      });
 
       // Do NOT call setEncoding('utf8') — the RDP protocol uses byte-length
       // prefixes, so we must work with raw Buffers for correct framing.

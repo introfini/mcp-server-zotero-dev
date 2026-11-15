@@ -54,7 +54,8 @@ export const PING_PROBE =
   "    version: Zotero.version," +
   "    appName: Zotero.appName," +
   "    platformVersion: Zotero.platformMajorVersion," +
-  "    dataDir: Zotero.DataDirectory.dir" +
+  "    dataDir: Zotero.DataDirectory.dir," +
+  "    profileDir: (typeof PathUtils !== 'undefined' && PathUtils.profileDir) || null" +
   "  });" +
   "})()";
 
@@ -64,6 +65,12 @@ interface PingInfo {
   appName?: string;
   platformVersion?: string | number;
   dataDir?: string;
+  /**
+   * The profile directory. Two profiles can share nothing but the bridge
+   * port (only one runs at a time), so this line, with the data directory,
+   * is what tells a development profile from the user's real one.
+   */
+  profileDir?: string | null;
 }
 
 /** A null/undefined result, raw or as an RDP grip - defensively "unreachable". */
@@ -137,6 +144,7 @@ export async function pingWithClient(
         `✓ Connected to ${info.appName} ${info.version}\n` +
         `  Platform: Firefox ${info.platformVersion}\n` +
         `  Data directory: ${info.dataDir}\n` +
+        (info.profileDir ? `  Profile: ${info.profileDir}\n` : "") +
         `  RDP port: ${port}\n\n` +
         `Ready to help with Zotero plugin development!`,
     },

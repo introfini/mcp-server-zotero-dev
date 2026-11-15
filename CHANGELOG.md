@@ -2,6 +2,16 @@
 
 All notable changes to MCP Server Zotero Dev will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- **`zotero_handle_dialog`: answer a blocking native modal dialog** ([#13](https://github.com/introfini/mcp-server-zotero-dev/issues/13)). Lifts the limitation 1.1.0 documented for the interaction tools. `Services.prompt` alert/confirm/confirmEx/prompt/select, `window.alert`/`confirm`/`prompt` and a modal `window.openDialog` spin a nested event loop on Zotero's main thread, so the click or script that opens one only returns once the dialog is closed, and no later call can reach it in between. The answer is therefore armed first: `zotero_handle_dialog` with the `button` to press (`accept`, `cancel`, `extra1`, `extra2`), optional `text` for a prompt, `checkbox`, `match` (title, message or URL) and `count`; then the action that opens the dialog, which returns normally; then `action: "status"` for what the dialog said and what was pressed. A modal window that is not a prompt is answered through its `<dialog>` element.
+
+  No new bridge plugin is needed: the handler is an observer for `common-dialog-loaded` and `domwindowopened` installed through the existing `evaluateJS` channel. It disarms itself after `count` dialogs or `timeoutMs` (default 60 s, at most 10 min), and on a clean server shutdown; `action: "disarm"` stops it. `action: "handle_open"` answers a dialog that is already open, once the call that opened it has returned or timed out.
+
+### Docs
+- README: the tool, the arm-then-trigger sequence, and the warning that an armed handler answers any matching dialog. ARCHITECTURE.md: new pitfall **A blocking modal dialog holds every evaluation result**, with what does and does not run inside the nested loop, measured on Zotero 11.0-beta.4 and 10.0.8.
+
 ## [1.1.5] - 2026-11-15
 
 ### Fixed

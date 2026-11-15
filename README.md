@@ -22,7 +22,7 @@ A **Model Context Protocol (MCP) server** that enables AI assistants like Claude
 | Category | Capabilities |
 |----------|-------------|
 | 🎯 **UI Inspection** | Screenshots, DOM tree, element finding, computed styles |
-| 🖱️ **UI Interaction** | Click elements and type text (shadow-DOM aware) |
+| 🖱️ **UI Interaction** | Click elements and type text (shadow-DOM aware), answer blocking dialogs |
 | 💻 **JS Execution** | Run code in Zotero context, inspect APIs, test snippets |
 | 🔧 **Build Tools** | Scaffold integration for build, serve, hot reload |
 | 📋 **Logs & Errors** | Stream debug output, error console, watch for issues |
@@ -126,7 +126,7 @@ That's it! No special launch flags, no configuration. 🎉
 
 ---
 
-## 🧰 Available Tools (28 total)
+## 🧰 Available Tools (29 total)
 
 <details>
 <summary><strong>UI Inspection</strong> — Screenshots, DOM, styles</summary>
@@ -144,14 +144,22 @@ That's it! No special launch flags, no configuration. 🎉
 </details>
 
 <details>
-<summary><strong>UI Interaction</strong> — Click and type in the Zotero UI</summary>
+<summary><strong>UI Interaction</strong> — Click and type in the Zotero UI, answer blocking dialogs</summary>
 
 | Tool | Description |
 |------|-------------|
 | `zotero_click_element` | Click an element by CSS selector (toolbar/menu button, preference control, list row). Pierces shadow DOM; `index` picks among multiple matches; `mouseEvents` synthesizes a full mouse sequence. |
 | `zotero_send_keys` | Type text into an input/textarea/contenteditable (focuses it first, fires input/change). Optional `clear` and `pressEnter`. |
+| `zotero_handle_dialog` | Answer a *blocking* native modal dialog (`Services.prompt` alert/confirm/confirmEx/prompt, `window.alert`/`confirm`/`prompt`, a modal `window.openDialog`). Arm it **before** the action that opens the dialog, then ask for its `status`: what the dialog said and which button was pressed. |
 
-> Resolution tries light DOM first, then pierces open shadow roots (Zotero's XUL custom elements keep internals in shadow DOM). **Limitation**: cannot dismiss a *blocking* native modal dialog (`Services.prompt.confirmEx`) — its nested modal loop blocks the eval thread these tools run on.
+> Resolution tries light DOM first, then pierces open shadow roots (Zotero's XUL custom elements keep internals in shadow DOM).
+>
+> **Blocking dialogs**: a native modal dialog spins a nested event loop on Zotero's main thread, so the click (or script) that opens it only returns once the dialog is closed. Arm the answer first:
+> 1. `zotero_handle_dialog` with `button` (`accept`, `cancel`, `extra1`, `extra2`), and optionally `text` (typed into a prompt), `checkbox`, `match` (only dialogs whose title, message or URL contains it), `count`, `timeoutMs` (default 60 s);
+> 2. the action that opens the dialog, e.g. `zotero_click_element`; it returns once the button has been pressed;
+> 3. `zotero_handle_dialog` with `action: "status"`.
+>
+> The handler disarms itself after `count` dialogs or `timeoutMs`, and when the server shuts down cleanly. Until then it answers *any* matching dialog, including one you open by hand in that Zotero. `action: "handle_open"` answers a dialog that is already open, once the call that opened it has returned or timed out.
 
 </details>
 

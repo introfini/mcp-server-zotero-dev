@@ -62,6 +62,10 @@ import {
   handleSendKeys,
 } from "./tools/interact.js";
 import {
+  handleDialogTool,
+  handleDialog,
+} from "./tools/dialog.js";
+import {
   readLogsTool,
   readErrorsTool,
   clearLogsTool,
@@ -167,6 +171,7 @@ const allTools: Tool[] = [
   listWindowsTool,
   clickElementTool,
   sendKeysTool,
+  handleDialogTool,
   readLogsTool,
   readErrorsTool,
   clearLogsTool,
@@ -255,6 +260,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         break;
       case "zotero_send_keys":
         content = await handleSendKeys(args as Record<string, unknown>);
+        break;
+
+      // Blocking modal dialogs
+      case "zotero_handle_dialog":
+        content = await handleDialog(args as Record<string, unknown>);
         break;
 
       // Logging tools

@@ -2,6 +2,17 @@
 
 All notable changes to MCP Server Zotero Dev will be documented in this file.
 
+## [1.1.5] - 2026-11-15
+
+### Fixed
+- **Parallel tool calls failed, or received each other's results** ([#34](https://github.com/introfini/mcp-server-zotero-dev/pull/34), thanks to @sachajw). MCP clients, Claude Code among them, often send several tool calls at once as their first action. Each call reached `connect()` while the client was still disconnected and opened its own socket on the same client, so all of them raced the intro packet and failed with `Could not find Zotero console actor`. Separately, `handleMessage` gave every reply to the oldest pending request, but RDP orders replies per actor, not across actors, and `evaluateJSAsync` results complete in any order, so parallel calls could get each other's results.
+
+  Concurrent callers now share one connection attempt, and a socket that closes before the intro rejects that attempt instead of leaving it pending forever. Replies go to the request they answer: an `evaluationResult` by the `resultID` its acknowledgment carried, any other reply to the oldest request sent to the actor it comes from. The client also counts as connected only once the intro arrives, not when TCP connects, which closes a gap where a call landing in between still skipped the shared attempt and received the intro as the reply to its first request (b2d3618).
+- **`zotero_db_stats` reported every library as `undefined`** ([#23](https://github.com/introfini/mcp-server-zotero-dev/issues/23)). The handler returned its payload as a raw object, and RDP object previews are one level deep, so the nested libraries array arrived as the string `"[Array]"`: the tool printed `Libraries (7)`, the length of that string, and one `undefined (undefined, ID: undefined)` line per character. It now uses the JSON round trip `zotero_db_query` and `zotero_db_schema` got in 1.1.3.
+
+### Added
+- **Tests for both fixes.** `tests/concurrency.test.mts` runs parallel first calls and out-of-order evaluations against a live Zotero, and the connection handshake against a scripted RDP server, so those cases also run without Zotero. `tests/db-stats.test.mts` drives `zotero_db_stats` over MCP stdio against a live Zotero.
+
 ## [1.1.4] - 2026-09-20
 
 ### Fixed

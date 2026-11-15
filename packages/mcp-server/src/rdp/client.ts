@@ -979,11 +979,14 @@ export class RDPClient extends EventEmitter {
    *   comes `from` that is still waiting for its direct reply. That may be a
    *   tombstone: a request that timed out still holds its place in its
    *   actor's order.
-   * - A reply whose `from` matches no pending request falls back to the oldest
-   *   such request, the behaviour before per-actor matching, so a reply from
-   *   an actor that answers under another name is not dropped. Tombstones
-   *   are left out of that fallback: a stray packet must not consume the
-   *   place of a reply that is still on its way.
+   * - A packet from an actor with no request pending is an event. Firefox's
+   *   DevTools server sends every reply `from` the actor the request was
+   *   addressed `to`, noSuchActor errors included, and queues each actor's
+   *   replies in request order (DevToolsServerConnection.onPacket and
+   *   _queueResponse in devtools-server-connection.js). The fallback this
+   *   replaces gave such a packet to the oldest request to any actor, so a
+   *   notification whose type is missing from EVENT_TYPES resolved an
+   *   unrelated request.
    */
   private findPendingFor(message: RDPResponse): [string, PendingRequest] | undefined {
     if (message.type === "evaluationResult" && "resultID" in message) {
@@ -994,13 +997,11 @@ export class RDPClient extends EventEmitter {
       return undefined;
     }
 
-    let oldestAwaitingReply: [string, PendingRequest] | undefined;
     for (const entry of this.pendingRequests) {
       if (entry[1].resultID !== undefined) continue; // acknowledged; waits for evaluationResult
       if (entry[1].to === message.from) return entry;
-      if (!entry[1].timedOut) oldestAwaitingReply ??= entry;
     }
-    return oldestAwaitingReply;
+    return undefined;
   }
 
   /**

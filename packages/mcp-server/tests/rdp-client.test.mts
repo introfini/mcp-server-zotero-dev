@@ -184,3 +184,28 @@ describe("a reply that arrives after its request timed out (#35 item 1)", () => 
     expect((await second).processes).toEqual([{ actor: "process2", isParent: true }]);
   });
 });
+
+describe("a packet from an actor with no request pending", () => {
+  it("is emitted as an event, not taken as the reply to a request sent to another actor", async () => {
+    // A notification of a type missing from EVENT_TYPES used to fall back to
+    // the oldest pending request. Arriving while listProcesses waited, it
+    // resolved listProcesses with no `processes`, so no parent process was
+    // found and the console-actor lookup could end in "Could not find Zotero
+    // console actor".
+    const notification = { from: "server1.conn0.watcher2", type: "someUnlistedNotification", items: [] };
+    const server = await rdpServer((conn, msg) => {
+      if (msg.type === "listProcesses") {
+        conn.send(notification);
+        conn.send({ from: "root", processes: [{ actor: "process1", isParent: true }] });
+      }
+    });
+    const client = clientFor(server.port);
+    await client.connect();
+    const events: Packet[] = [];
+    client.on("message", (m: Packet) => events.push(m));
+
+    const reply = await client.sendMessage({ to: "root", type: "listProcesses" });
+    expect(reply.processes).toEqual([{ actor: "process1", isParent: true }]);
+    expect(events).toEqual([notification]);
+  });
+});

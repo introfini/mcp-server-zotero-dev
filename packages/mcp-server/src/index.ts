@@ -25,8 +25,7 @@ import {
   type TextContent,
   type ImageContent,
 } from "@modelcontextprotocol/sdk/types.js";
-import { createClient, RDPClient } from "./rdp/index.js";
-import { loadConfig, type Config } from "./utils/config.js";
+import { getConfig, disconnectRdpClient } from "./rdp/session.js";
 
 // Tool handlers - imported from tools directory
 import {
@@ -121,34 +120,10 @@ const server = new Server(
   }
 );
 
-// Shared state
-let rdpClient: RDPClient | null = null;
-let config: Config;
-
-/**
- * Get or create the RDP client
- */
-export async function getRdpClient(): Promise<RDPClient> {
-  if (!rdpClient) {
-    rdpClient = createClient({
-      host: config.rdp.host,
-      port: config.rdp.port,
-    });
-  }
-
-  if (!rdpClient.isConnected()) {
-    await rdpClient.connect();
-  }
-
-  return rdpClient;
-}
-
-/**
- * Get the current configuration
- */
-export function getConfig(): Config {
-  return config;
-}
+// The RDP session (client + configuration) lives in rdp/session.ts, which
+// tool modules can import without starting this server (#33). Re-exported
+// so existing imports of these two names from here keep working.
+export { getRdpClient, getConfig } from "./rdp/session.js";
 
 // Ping tool definition
 // Collect all tools
@@ -209,7 +184,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     switch (name) {
       // Core tools
       case "zotero_ping":
-        content = await handlePing(config.rdp.port);
+        content = await handlePing(getConfig().rdp.port);
         break;
       case "zotero_execute_js":
         content = await handleExecuteJs(args as Record<string, unknown>);
@@ -324,7 +299,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 // Main entry point
 async function main() {
   // Load configuration
-  config = loadConfig();
+  const config = getConfig();
 
   console.error(`MCP Server Zotero Dev starting...`);
   console.error(`RDP target: ${config.rdp.host}:${config.rdp.port}`);
@@ -342,16 +317,12 @@ async function main() {
 
 // Handle shutdown
 process.on("SIGINT", () => {
-  if (rdpClient) {
-    rdpClient.disconnect();
-  }
+  disconnectRdpClient();
   process.exit(0);
 });
 
 process.on("SIGTERM", () => {
-  if (rdpClient) {
-    rdpClient.disconnect();
-  }
+  disconnectRdpClient();
   process.exit(0);
 });
 

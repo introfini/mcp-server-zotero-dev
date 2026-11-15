@@ -5,7 +5,7 @@
  */
 
 import type { Tool, TextContent, ImageContent } from "@modelcontextprotocol/sdk/types.js";
-import { getRdpClient } from "../index.js";
+import { getRdpClient } from "../rdp/session.js";
 
 export const screenshotTool: Tool = {
   name: "zotero_screenshot",

@@ -5,7 +5,7 @@
  */
 
 import type { Tool, TextContent } from "@modelcontextprotocol/sdk/types.js";
-import { getRdpClient } from "../index.js";
+import { getRdpClient } from "../rdp/session.js";
 import { existsSync } from "node:fs";
 
 // Tool definitions

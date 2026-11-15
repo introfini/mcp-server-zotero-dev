@@ -370,3 +370,37 @@ describe("timeouts", () => {
     }
   });
 });
+
+describe("the console actor", () => {
+  /** What Zotero sends right after getTarget: the target announcing its window. */
+  const announce = (target: string) => [
+    { from: target, type: "frameUpdate", frames: [{ id: 3, url: "chrome://zotero/content/zoteroPane.xhtml" }] },
+  ];
+  const destroyed = (from: string, id: number) => ({ from, type: "frameUpdate", frames: [{ id, destroy: true, url: "" }] });
+
+  it("stays across calls: the target announcing its own window is not a reason to drop it", async () => {
+    // Each call used to make a new ParentProcessTarget (traced on 11.0-beta.3).
+    const { fake, client } = await onFake({ afterGetTarget: announce });
+    for (let i = 0; i < 10; i++) expect((await client.evaluateJS(fakeCode(i))).result).toBe(i);
+    expect(fake.getTargets).toBe(1);
+  });
+
+  it("is dropped when the target's own window is destroyed, and only then", async () => {
+    const { fake, client } = await onFake({ afterGetTarget: announce });
+    await client.evaluateJS(fakeCode(1));
+    fake.broadcast(destroyed("parentProcessTarget1", 42)); // another window closed
+    fake.broadcast(destroyed("parentProcessTarget99", 3)); // an older target's report
+    await delay(30);
+    await client.evaluateJS(fakeCode(2));
+    expect(fake.getTargets).toBe(1);
+    fake.broadcast(destroyed("parentProcessTarget1", 3)); // the target's own window
+    await delay(30);
+    expect((await client.evaluateJS(fakeCode(3))).result).toBe(3);
+    expect(fake.getTargets).toBe(2);
+  });
+
+  it("is looked for again when it cannot be found at first", async () => {
+    const { client } = await onFake({ failGetTarget: 1 });
+    expect((await client.evaluateJS(fakeCode("found"))).result).toBe("found");
+  });
+});

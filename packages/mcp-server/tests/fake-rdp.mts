@@ -101,8 +101,10 @@ export class FakeRdp {
       this.getTargets++;
       const target = `parentProcessTarget${this.getTargets}`;
       const console = `consoleActor${this.getTargets}`;
-      this.send(s, { from: to, process: { actor: target, consoleActor: console, title: "Zotero", url: "chrome://zotero/content/zoteroPane.xhtml" } });
-      for (const p of this.options.afterGetTarget?.(target) ?? []) this.send(s, p);
+      this.send(s, { from: to, process: { actor: target, consoleActor: console, title: "Zotero", url: "chrome://zotero/content/zoteroPane.xhtml", outerWindowID: 3 } });
+      // A few ms later, as in Zotero: after the client has stored the actor.
+      const after = this.options.afterGetTarget?.(target) ?? [];
+      if (after.length) setTimeout(() => { for (const p of after) this.send(s, p); }, 5);
     } else if (type === "evaluateJSAsync") {
       const resultID = `r${++this.evalCounter}`;
       this.send(s, { from: to, resultID });

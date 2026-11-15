@@ -685,7 +685,7 @@ export class RDPClient extends EventEmitter {
 
     // Ensure we have a console actor
     if (!this.state.consoleActor) {
-      await this.ensureConsoleActor();
+      await this.acquireConsoleActor();
       this.consoleActorCachedAt = Date.now();
     }
 
@@ -826,7 +826,7 @@ export class RDPClient extends EventEmitter {
     types: string[] = ["ConsoleAPI", "PageError"]
   ): Promise<GetCachedMessagesResponse> {
     if (!this.state.consoleActor) {
-      await this.ensureConsoleActor();
+      await this.acquireConsoleActor();
     }
 
     if (!this.state.consoleActor) {
@@ -838,6 +838,29 @@ export class RDPClient extends EventEmitter {
       type: "getCachedMessages",
       messageTypes: types,
     });
+  }
+
+  /**
+   * ensureConsoleActor(), tried twice more before giving up: after 250 ms,
+   * then after 1 s on a fresh connection. Nothing has been sent for
+   * evaluation at this point, so a retry can never run code twice. "Could
+   * not find Zotero console actor" used to end the call outright, typically
+   * right after a window opened or closed, while a single retry by hand
+   * brought the actor back every time.
+   */
+  private async acquireConsoleActor(): Promise<void> {
+    const delays = [250, 1000];
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await this.ensureConsoleActor();
+        return;
+      } catch (error) {
+        if (attempt >= delays.length) throw error;
+        this.invalidateActorCache();
+        await this.delay(delays[attempt]);
+        if (attempt === delays.length - 1) await this.reconnect();
+      }
+    }
   }
 
   /**
@@ -1020,6 +1043,36 @@ export class RDPClient extends EventEmitter {
   ]);
 
   /**
+   * Whether an event means the cached console actor can no longer be used.
+   *
+   * Every frameUpdate used to count, but a target announces its own window
+   * with a frameUpdate (`{frames: [{id, url}]}`) right after getTarget. So the
+   * actor fetched for one call was dropped before the next, every call made
+   * a new ParentProcessTarget, and the old ones lived on for the whole
+   * connection, each sending its own frameUpdate for every window opened or
+   * closed (traced on Zotero 11.0-beta.3: targets 6, 24, 42, 60... one per
+   * call; four events for one window closed after four calls). Now only the
+   * CURRENT target's report that its own window was destroyed counts
+   * (`{frames: [{id, destroy: true}]}` with the target's outerWindowID, or
+   * `destroyAll`); with the id unknown, any destroyed frame of the current
+   * target does. tabNavigated, tabDetached and workerListChanged still count.
+   */
+  private invalidatesConsoleActor(message: RDPResponse): boolean {
+    const type = message.type as string;
+    if (!RDPClient.ACTOR_INVALIDATING_EVENTS.has(type)) return false;
+    if (type !== "frameUpdate") return true;
+    const target = this.state.currentTab;
+    if (!target || message.from !== target.actorID) return false;
+    if (message.destroyAll) return true;
+    const frames = Array.isArray(message.frames)
+      ? (message.frames as Array<{ id?: number; destroy?: boolean }>)
+      : [];
+    return frames.some(
+      (f) => f.destroy === true && (target.outerWindowID === undefined || f.id === target.outerWindowID)
+    );
+  }
+
+  /**
    * Handle a parsed RDP message
    */
   private handleMessage(message: RDPResponse): void {
@@ -1029,7 +1082,7 @@ export class RDPClient extends EventEmitter {
     if (messageType && RDPClient.EVENT_TYPES.has(messageType)) {
       // Check if this event invalidates our cached actors
       // Based on research: navigation/detach events make actors stale
-      if (RDPClient.ACTOR_INVALIDATING_EVENTS.has(messageType)) {
+      if (this.invalidatesConsoleActor(message)) {
         this.invalidateActorCache();
         this.emit("actorsInvalidated", messageType);
       }

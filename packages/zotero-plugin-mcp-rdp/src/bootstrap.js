@@ -271,22 +271,73 @@ async function openListener() {
 // (A bind-probe would be unreliable: Mozilla server sockets set SO_REUSEADDR,
 // and on Windows that lets a second bind steal a live port.)
 var healthCheckInterval = null;
+var checkInFlight = false;
+
+// How long a probe waits for the intro packet, counted in time the main
+// thread was FREE to deliver it (#32).
+//
+// The intro is written by the DevTools server on this same main thread, and
+// the probe's own timer runs there too. A plain 1500 ms wall-clock timeout
+// therefore also expired whenever Zotero's main thread was merely busy for
+// longer than that (startup, a sync, a long synchronous eval, waking from
+// sleep): the listener was alive, often had already accepted the probe's
+// connection, but the probe reported it dead, the health check closed it -
+// dropping every connected client - and the reopen's own verification probe
+// timed out the same way, so the bridge closed the fresh listener too and the
+// port really refused connections until the next check. That is the FLAPPING
+// / "DOWN ... does not answer (held by another process?)" pair in the
+// lifecycle log: keeping the main thread busy in back-to-back chunks of 3 s,
+// or of only 0.8 s (the intro needs several turns of the event loop), produces
+// either line within one or two checks, and RDP clients connecting, closing
+// and aborting mid-request on an idle main thread produce neither.
+//
+// So the probe ticks every PROBE_TICK_MS and each tick spends the time since
+// the previous one from the budget, but a late tick (the main thread was
+// blocked in between) spends at most two ticks' worth. A dead listener on a
+// free main thread still fails after ~PROBE_BUDGET_MS, as before; a blocked
+// main thread just makes the probe wait for the intro that is queued behind
+// it. Every tick spends at least half a tick, so the probe always ends, after
+// at most 2 * PROBE_BUDGET_MS / PROBE_TICK_MS ticks.
+var PROBE_BUDGET_MS = 1500;
+var PROBE_TICK_MS = 100;
 
 function probeConnect() {
   return new Promise(function (resolve) {
     var done = false;
     var transport = null;
+    var timer = null;
+    var started = Date.now();
     var finish = function (alive) {
       if (done) return;
       done = true;
+      clearTimeout(timer);
       try { if (transport) transport.close(Components.results.NS_OK); } catch (e) {}
+      var took = Date.now() - started;
+      if (alive && took > PROBE_BUDGET_MS) {
+        log("Probe: intro arrived after " + took + " ms - the main thread was busy,"
+          + " the listener was fine");
+      }
       resolve(alive);
     };
     try {
       var sts = Components.classes["@mozilla.org/network/socket-transport-service;1"]
         .getService(Components.interfaces.nsISocketTransportService);
       transport = sts.createTransport([], "127.0.0.1", rdpPort, null, null);
-      var timer = setTimeout(function () { finish(false); }, 1500);
+      var budget = PROBE_BUDGET_MS;
+      var last = started;
+      var tick = function () {
+        var now = Date.now();
+        // Clamped both ways: a late tick counts as two, and a wall clock that
+        // jumps (back, or forward across sleep) cannot stall or skip the budget.
+        budget -= Math.min(Math.max(now - last, PROBE_TICK_MS / 2), 2 * PROBE_TICK_MS);
+        last = now;
+        if (budget <= 0 || isShuttingDown) {
+          finish(false);
+          return;
+        }
+        timer = setTimeout(tick, PROBE_TICK_MS);
+      };
+      timer = setTimeout(tick, PROBE_TICK_MS);
       // IMPORTANT: wait for the server's RDP intro packet and only close
       // AFTER reading it. Closing at TCP-connect time aborts the connection
       // mid-handshake - the DevTools server's intro write then hits a dying
@@ -296,7 +347,6 @@ function probeConnect() {
       var input = transport.openInputStream(0, 0, 0);
       input.asyncWait({
         onInputStreamReady: function (s) {
-          clearTimeout(timer);
           var alive = false;
           try {
             var n = s.available();           // throws if closed/refused
@@ -318,7 +368,20 @@ function probeConnect() {
   });
 }
 
+// One check at a time. A probe can now wait out a busy main thread for longer
+// than the 10 s interval, and two overlapping checks that both found the port
+// silent would each close and reopen the listener.
 async function checkListener() {
+  if (checkInFlight) return;
+  checkInFlight = true;
+  try {
+    await checkListenerOnce();
+  } finally {
+    checkInFlight = false;
+  }
+}
+
+async function checkListenerOnce() {
   if (isShuttingDown) return;
   if (rdpListener) {
     var alive = await probeConnect();

@@ -142,6 +142,8 @@ Environment variables (all optional):
 | `ZOTERO_RDP_HOST` | `localhost` | RDP host address |
 | `ZOTERO_DATA_DIR` | auto-detected | Zotero data directory path |
 | `ZOTERO_PROFILE_PATH` | auto-detected | Zotero profile path |
+| `ZOTERO_MCP_LOCK` | off | `1` turns on the session lock: `zotero_acquire`/`zotero_release` let several sessions sharing one Zotero take turns ([details](https://github.com/introfini/mcp-server-zotero-dev#-sharing-one-zotero-between-sessions)) |
+| `ZOTERO_MCP_LOCK_LABEL` | none | Name the other sessions see while this one holds the lock |
 
 ## Troubleshooting
 

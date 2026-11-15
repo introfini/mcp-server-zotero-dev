@@ -97,6 +97,13 @@ import {
   handleDbSchema,
   handleDbStats,
 } from "./tools/database.js";
+import { acquireTool, releaseTool, handleAcquire, handleRelease } from "./tools/lock.js";
+import {
+  SessionLock,
+  describeHolder,
+  isGatedTool,
+  lockConfigFromEnv,
+} from "./utils/session-lock.js";
 import { allPrompts, getPromptHandler } from "./prompts/index.js";
 
 // Read the version from package.json so the MCP handshake (serverInfo.version)
@@ -124,6 +131,8 @@ const server = new Server(
 // Shared state
 let rdpClient: RDPClient | null = null;
 let config: Config;
+// The opt-in session lock (#28); null unless ZOTERO_MCP_LOCK=1.
+let sessionLock: SessionLock | null = null;
 
 /**
  * Get or create the RDP client
@@ -183,9 +192,10 @@ const allTools: Tool[] = [
   dbStatsTool,
 ];
 
-// Register tool listing handler
+// Register tool listing handler. zotero_acquire/zotero_release exist only
+// with ZOTERO_MCP_LOCK=1, so a server without it lists exactly what it did.
 server.setRequestHandler(ListToolsRequestSchema, async () => {
-  return { tools: allTools };
+  return { tools: sessionLock ? [...allTools, acquireTool, releaseTool] : allTools };
 });
 
 // Register prompt listing handler
@@ -200,11 +210,24 @@ server.setRequestHandler(GetPromptRequestSchema, async (request) => {
 });
 
 // Register tool execution handler
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
+server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
   const { name, arguments: args = {} } = request.params;
 
   try {
     let content: (TextContent | ImageContent)[];
+    let isError = false;
+
+    // The session lock (#28) is checked here, before the dispatch, so no tool
+    // can skip it: every tool is gated unless LOCK_EXEMPT_TOOLS names it, and
+    // a tool added later is gated without anyone having to remember to.
+    let lockNote: string | undefined;
+    if (sessionLock && isGatedTool(name)) {
+      const gate = await sessionLock.gate(await getRdpClient(), name);
+      if (!gate.allowed) {
+        return { content: [{ type: "text", text: gate.text ?? "" }], isError: true };
+      }
+      lockNote = gate.text;
+    }
 
     switch (name) {
       // Core tools
@@ -307,11 +330,28 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         content = await handleDbStats();
         break;
 
+      // Session lock tools, only with ZOTERO_MCP_LOCK=1
+      case "zotero_acquire":
+      case "zotero_release": {
+        if (!sessionLock) {
+          throw new Error(`Unknown tool: ${name}`);
+        }
+        const client = await getRdpClient();
+        ({ content, isError } =
+          name === "zotero_acquire"
+            ? await handleAcquire(sessionLock, client, args as Record<string, unknown>, extra.signal)
+            : await handleRelease(sessionLock, client));
+        break;
+      }
+
       default:
         throw new Error(`Unknown tool: ${name}`);
     }
 
-    return { content };
+    if (lockNote) {
+      content = [...content, { type: "text", text: lockNote }];
+    }
+    return isError ? { content, isError } : { content };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return {
@@ -331,6 +371,12 @@ async function main() {
 
   if (config.zotero.dataDir) {
     console.error(`Zotero data: ${config.zotero.dataDir}`);
+  }
+
+  const lockConfig = lockConfigFromEnv();
+  if (lockConfig.enabled) {
+    sessionLock = new SessionLock(lockConfig.holder);
+    console.error(`Session lock: on, this server is ${describeHolder(lockConfig.holder)}`);
   }
 
   // Create transport and connect

@@ -254,3 +254,54 @@ describe("overlapping reconnects (#35 item 2)", () => {
     expect(server.conns).toHaveLength(2); // the first connection and one reconnect
   });
 });
+
+describe("events from a socket that has been replaced (#35 item 3)", () => {
+  /**
+   * The state the issue describes: isConnected() finds the socket no longer
+   * writable and counts the connection as down without destroying it, and
+   * the next connect() opens a new socket while the old one is still open.
+   * end() on the client's socket stands in for whatever stopped it being
+   * writable. The server keeps its side open (allowHalfOpen), so the old
+   * socket can still deliver data, and closes only when the test says so.
+   * listProcesses is held until release() and names the connection it came
+   * in on.
+   */
+  async function withReplacedSocket() {
+    const zotero = mainThread();
+    const server = await rdpServer(
+      (conn, msg) => {
+        if (msg.type !== "listProcesses") return;
+        zotero.reply(() => conn.send({ from: "root", processes: [{ actor: `process-on-conn${conn.index}`, isParent: true }] }));
+      },
+      { allowHalfOpen: true }
+    );
+    const client = clientFor(server.port);
+    await client.connect();
+    (client as unknown as { socket: net.Socket }).socket.end();
+    // What getRdpClient() does for every tool call:
+    if (!client.isConnected()) await client.connect();
+    expect(server.conns).toHaveLength(2);
+    return { client, old: server.conns[0], zotero };
+  }
+
+  it("does not let the old socket's close fail the new connection's requests or drop it", async () => {
+    const { client, old, zotero } = await withReplacedSocket();
+    const reply = client.sendMessage({ to: "root", type: "listProcesses" });
+    reply.catch(() => { /* asserted below; avoids an unhandled rejection while waiting */ });
+    old.sock.end(); // the old socket closes now, while the request waits on the new one
+    await delay(50);
+    zotero.release();
+    expect((await reply).processes).toEqual([{ actor: "process-on-conn1", isParent: true }]);
+    expect(client.isConnected()).toBe(true);
+  });
+
+  it("does not take a late packet on the old socket as a reply on the new connection", async () => {
+    const { client, old, zotero } = await withReplacedSocket();
+    const reply = client.sendMessage({ to: "root", type: "listProcesses" });
+    reply.catch(() => { /* asserted below; avoids an unhandled rejection while waiting */ });
+    old.send({ from: "root", processes: [{ actor: "stale", isParent: true }] });
+    await delay(50);
+    zotero.release();
+    expect((await reply).processes).toEqual([{ actor: "process-on-conn1", isParent: true }]);
+  });
+});

@@ -138,9 +138,35 @@ export class RDPClient extends EventEmitter {
     return new Promise((resolve, reject) => {
       let introReceived = false;
 
+      // A socket still set here is one that isConnected() or a socket error
+      // counted as down without destroying it. Destroy it before replacing
+      // it, and carry nothing of its connection over (#35): its requests can
+      // no longer be answered, its tombstones and actors belong to it, and a
+      // partial packet left in the framing buffer would corrupt the new
+      // stream.
+      if (this.socket) {
+        const previous = this.socket;
+        this.socket = null;
+        previous.destroy();
+        this.failPending("Connection closed before a reply arrived");
+      }
+      this.invalidateActorCache();
+      this.buffer = Buffer.alloc(0);
+
+      const socket = createConnection({
+        host: this.options.host,
+        port: this.options.port,
+      });
+      this.socket = socket;
+      // Every handler below acts only while `socket` is the current one. They
+      // used to act on the client whichever socket fired: the close of a
+      // replaced socket nulled the new one and failed its requests, and its
+      // late data went into the new connection's framing buffer (#35).
+      const isCurrent = () => this.socket === socket;
+
       // Handler for the intro packet that arrives immediately after connection
       const handleIntro = (message: RDPResponse) => {
-        if (!introReceived && "applicationType" in message) {
+        if (!introReceived && isCurrent() && "applicationType" in message) {
           introReceived = true;
           this.state.root = {
             actorID: "root",
@@ -166,28 +192,26 @@ export class RDPClient extends EventEmitter {
       // Listen for the intro packet
       this.on("message", handleIntro);
 
-      this.socket = createConnection({
-        host: this.options.host,
-        port: this.options.port,
-      });
-
       // Do NOT call setEncoding('utf8') — the RDP protocol uses byte-length
       // prefixes, so we must work with raw Buffers for correct framing.
 
       // Enable TCP keepalive to detect dead connections faster
       // This is crucial for detecting when Zotero closes unexpectedly
-      this.socket.setKeepAlive(true, 10000); // 10 second keepalive probe
+      socket.setKeepAlive(true, 10000); // 10 second keepalive probe
 
-      this.socket.on("data", (data: Buffer) => this.handleData(data));
-      this.socket.on("error", (err) => {
-        this.removeListener("message", handleIntro);
-        this.handleError(err, reject);
+      socket.on("data", (data: Buffer) => {
+        if (isCurrent()) this.handleData(data);
       });
-      this.socket.on("close", () => {
+      socket.on("error", (err) => {
+        this.removeListener("message", handleIntro);
+        // A replaced socket's attempt is failed by its close, which follows.
+        if (isCurrent()) this.handleError(err, reject);
+      });
+      socket.on("close", () => {
         // A close before the intro packet (bridge restarting, disconnect() or
         // a socket timeout mid-handshake) must fail this attempt, or the
         // attempt connect() shares would never settle and every later call
-        // would wait on it.
+        // would wait on it. That holds for a replaced socket too.
         if (!introReceived) {
           this.removeListener("message", handleIntro);
           reject(
@@ -197,11 +221,13 @@ export class RDPClient extends EventEmitter {
             )
           );
         }
-        this.handleClose();
+        if (isCurrent()) this.handleClose();
       });
-      this.socket.on("timeout", () => this.handleTimeout());
+      socket.on("timeout", () => {
+        if (isCurrent()) this.handleTimeout();
+      });
 
-      this.socket.setTimeout(this.options.timeout);
+      socket.setTimeout(this.options.timeout);
     });
   }
 
@@ -217,9 +243,17 @@ export class RDPClient extends EventEmitter {
       this.socket = null;
     }
     this.state = createConnectionState();
+    this.failPending("Connection closed");
+  }
+
+  /**
+   * Fail every request still waiting on the current connection and forget its
+   * tombstones: nothing more can arrive for them.
+   */
+  private failPending(reason: string): void {
     this.pendingRequests.forEach((req) => {
       clearTimeout(req.timeout);
-      req.reject(new Error("Connection closed"));
+      req.reject(new Error(reason));
     });
     this.pendingRequests.clear();
   }
@@ -1053,11 +1087,7 @@ export class RDPClient extends EventEmitter {
     // Fail pending requests immediately - their replies can never arrive on
     // a closed socket. They previously sat out the full request timeout
     // (30s by default) before erroring.
-    this.pendingRequests.forEach((req) => {
-      clearTimeout(req.timeout);
-      req.reject(new Error("Connection closed before a reply arrived"));
-    });
-    this.pendingRequests.clear();
+    this.failPending("Connection closed before a reply arrived");
 
     if (wasConnected) {
       this.emit("disconnected");

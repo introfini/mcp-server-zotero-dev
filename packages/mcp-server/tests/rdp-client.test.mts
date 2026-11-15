@@ -12,6 +12,7 @@
 import net from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import { RDPClient } from "../src/rdp/index.js";
+import { FakeRdp, fakeCode, type FakeOptions } from "./fake-rdp.mjs";
 
 type Packet = Record<string, unknown>;
 
@@ -33,14 +34,25 @@ const INTRO: Packet = { from: "root", applicationType: "browser", traits: {} };
 const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 let servers: ScriptedServer[] = [];
+let fakes: FakeRdp[] = [];
 let clients: RDPClient[] = [];
 
 afterEach(async () => {
   for (const c of clients) c.disconnect();
   clients = [];
-  await Promise.all(servers.map((s) => s.close()));
+  await Promise.all([...servers.map((s) => s.close()), ...fakes.map((f) => f.stop())]);
   servers = [];
+  fakes = [];
 });
+
+/** A connected client on a FakeRdp (tests/fake-rdp.mts), which answers the whole evaluateJS flow. */
+async function onFake(options: FakeOptions = {}, timeout?: number): Promise<{ fake: FakeRdp; client: RDPClient }> {
+  const fake = new FakeRdp(options);
+  fakes.push(fake);
+  const client = clientFor(await fake.start(), timeout);
+  await client.connect();
+  return { fake, client };
+}
 
 /**
  * A scripted RDP server. Like Firefox's DevTools server it sends the intro
@@ -318,5 +330,43 @@ describe("events from a socket that has been replaced (#35 item 3)", () => {
     await delay(50);
     zotero.release();
     expect((await reply).processes).toEqual([{ actor: "process-on-conn1", isParent: true }]);
+  });
+});
+
+describe("timeouts", () => {
+  it("keep the connection when an evaluation outlives its timeout, and drop its late result", async () => {
+    // The socket's inactivity timeout was the request timeout, so an
+    // evaluation that ran past it left the socket idle that long and the
+    // connection was torn down under it: the next call failed with "Not
+    // connected to Zotero" while the code was still running in Zotero.
+    const { fake, client } = await onFake({}, 200);
+    const late: unknown[] = [];
+    client.on("lateReply", (m: Packet) => late.push(m.result));
+    const error = await client.evaluateJS(fakeCode("late", 600)).then(() => null, (e: Error) => e);
+    await delay(150); // past the old inactivity timeout
+    expect(client.isConnected()).toBe(true);
+    expect(error?.message).toMatch(/^Zotero did not answer within 0\.2 s\. The code is still running in Zotero/);
+    expect((await client.evaluateJS(fakeCode("next"))).result).toBe("next");
+    await delay(400); // the late result has arrived
+    expect(late).toEqual(["late"]);
+    expect((await client.evaluateJS(fakeCode("after"))).result).toBe("after");
+    expect(fake.connections).toBe(1);
+  });
+
+  it("let one call wait longer than the default", async () => {
+    const { client } = await onFake({}, 100);
+    const r = await client.evaluateJS(fakeCode("slow but allowed", 250), { timeoutMs: 1000 });
+    expect(r.result).toBe("slow but allowed");
+  });
+
+  it("fail connect(), instead of hanging, on a port that accepts but never sends the RDP greeting", async () => {
+    const silent = net.createServer(() => { /* accept and say nothing */ });
+    await new Promise<void>((r) => silent.listen(0, "127.0.0.1", () => r()));
+    try {
+      const client = clientFor((silent.address() as net.AddressInfo).port, 200);
+      await expect(client.connect()).rejects.toThrow(/No RDP greeting/);
+    } finally {
+      await new Promise<void>((r) => silent.close(() => r()));
+    }
   });
 });

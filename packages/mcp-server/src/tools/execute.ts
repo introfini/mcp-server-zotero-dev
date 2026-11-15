@@ -125,6 +125,14 @@ export const executeJsTool: Tool = {
         description: "Whether to await the result if it's a Promise (default: true)",
         default: true,
       },
+      timeout: {
+        type: "number",
+        description:
+          "Seconds to wait for the result (default 30, at most 600). Past it the code keeps " +
+          "running in Zotero and its result is discarded: raise it for long operations " +
+          "rather than re-running them.",
+        default: 30,
+      },
     },
     required: ["code"],
   },
@@ -185,7 +193,11 @@ export async function handleExecuteJs(
     code = wrapInIIFE(code);
   }
 
-  let response = await client.evaluateJS(code);
+  // Per-call timeout, seconds -> ms, within [1 s, 10 min].
+  const seconds = typeof args.timeout === "number" && Number.isFinite(args.timeout) ? args.timeout : 30;
+  const timeoutMs = Math.round(Math.min(600, Math.max(1, seconds)) * 1000);
+
+  let response = await client.evaluateJS(code, { timeoutMs });
 
   // Fallback: if detection failed and we get "return not in function" error,
   // wrap the original code and retry
@@ -194,7 +206,7 @@ export async function handleExecuteJs(
     code === originalCode // Only retry if we didn't already wrap
   ) {
     code = wrapInIIFE(originalCode);
-    response = await client.evaluateJS(code);
+    response = await client.evaluateJS(code, { timeoutMs });
   }
 
   if (response.exception || response.exceptionMessage) {

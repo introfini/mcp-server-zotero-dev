@@ -229,6 +229,21 @@ describe("a packet from an actor with no request pending", () => {
     expect(reply.processes).toEqual([{ actor: "process1", isParent: true }]);
     expect(events).toEqual([notification]);
   });
+
+  it("does not take the root actor's own notification as the reply to a request to root", async () => {
+    // The root actor sends processListChanged, tabListChanged, ... `from`
+    // root, so matching by actor alone gives one to a pending listProcesses.
+    const server = await rdpServer((conn, msg) => {
+      if (msg.type === "listProcesses") {
+        conn.send({ from: "root", type: "processListChanged" });
+        conn.send({ from: "root", processes: [{ actor: "process1", isParent: true }] });
+      }
+    });
+    const client = clientFor(server.port);
+    await client.connect();
+    const reply = await client.sendMessage({ to: "root", type: "listProcesses" });
+    expect(reply.processes).toEqual([{ actor: "process1", isParent: true }]);
+  });
 });
 
 describe("overlapping reconnects (#35 item 2)", () => {

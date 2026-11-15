@@ -947,6 +947,16 @@ export class RDPClient extends EventEmitter {
     "reflowActivity",
     "styleSheetsAdded",
     "styleSheetsRemoved",
+    // The root actor's notifications (devtools/server/actors/root.js sends
+    // them `from` root) and the descriptors' and watcher's. A reply never
+    // carries these types, but a request to the same actor may be pending
+    // when one arrives, and matching by actor would take it as the reply.
+    "tabListChanged",
+    "processListChanged",
+    "addonListChanged",
+    "serviceWorkerRegistrationListChanged",
+    "descriptor-destroyed",
+    "target-destroyed-form",
   ]);
 
   /**

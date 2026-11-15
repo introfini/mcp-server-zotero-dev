@@ -72,6 +72,12 @@ interface PendingRequest {
    * itself arrives later as an "evaluationResult" carrying the same ID.
    */
   resultID?: string;
+  /**
+   * The request timed out and its caller has been told so; the entry stays
+   * as a tombstone until the reply the actor still owes arrives, and that
+   * reply is then dropped (see sendMessage()).
+   */
+  timedOut?: boolean;
 }
 
 export class RDPClient extends EventEmitter {
@@ -92,6 +98,8 @@ export class RDPClient extends EventEmitter {
   // The connection attempt in flight, shared by every caller that arrives
   // before it settles (see connect()).
   private connecting: Promise<void> | null = null;
+  // The reconnect in flight, shared the same way (see reconnect()).
+  private reconnecting: Promise<void> | null = null;
 
   constructor(options: Partial<RDPClientOptions> = {}) {
     super();
@@ -130,9 +138,35 @@ export class RDPClient extends EventEmitter {
     return new Promise((resolve, reject) => {
       let introReceived = false;
 
+      // A socket still set here is one that isConnected() or a socket error
+      // counted as down without destroying it. Destroy it before replacing
+      // it, and carry nothing of its connection over (#35): its requests can
+      // no longer be answered, its tombstones and actors belong to it, and a
+      // partial packet left in the framing buffer would corrupt the new
+      // stream.
+      if (this.socket) {
+        const previous = this.socket;
+        this.socket = null;
+        previous.destroy();
+        this.failPending("Connection closed before a reply arrived");
+      }
+      this.invalidateActorCache();
+      this.buffer = Buffer.alloc(0);
+
+      const socket = createConnection({
+        host: this.options.host,
+        port: this.options.port,
+      });
+      this.socket = socket;
+      // Every handler below acts only while `socket` is the current one. They
+      // used to act on the client whichever socket fired: the close of a
+      // replaced socket nulled the new one and failed its requests, and its
+      // late data went into the new connection's framing buffer (#35).
+      const isCurrent = () => this.socket === socket;
+
       // Handler for the intro packet that arrives immediately after connection
       const handleIntro = (message: RDPResponse) => {
-        if (!introReceived && "applicationType" in message) {
+        if (!introReceived && isCurrent() && "applicationType" in message) {
           introReceived = true;
           this.state.root = {
             actorID: "root",
@@ -158,28 +192,26 @@ export class RDPClient extends EventEmitter {
       // Listen for the intro packet
       this.on("message", handleIntro);
 
-      this.socket = createConnection({
-        host: this.options.host,
-        port: this.options.port,
-      });
-
       // Do NOT call setEncoding('utf8') — the RDP protocol uses byte-length
       // prefixes, so we must work with raw Buffers for correct framing.
 
       // Enable TCP keepalive to detect dead connections faster
       // This is crucial for detecting when Zotero closes unexpectedly
-      this.socket.setKeepAlive(true, 10000); // 10 second keepalive probe
+      socket.setKeepAlive(true, 10000); // 10 second keepalive probe
 
-      this.socket.on("data", (data: Buffer) => this.handleData(data));
-      this.socket.on("error", (err) => {
-        this.removeListener("message", handleIntro);
-        this.handleError(err, reject);
+      socket.on("data", (data: Buffer) => {
+        if (isCurrent()) this.handleData(data);
       });
-      this.socket.on("close", () => {
+      socket.on("error", (err) => {
+        this.removeListener("message", handleIntro);
+        // A replaced socket's attempt is failed by its close, which follows.
+        if (isCurrent()) this.handleError(err, reject);
+      });
+      socket.on("close", () => {
         // A close before the intro packet (bridge restarting, disconnect() or
         // a socket timeout mid-handshake) must fail this attempt, or the
         // attempt connect() shares would never settle and every later call
-        // would wait on it.
+        // would wait on it. That holds for a replaced socket too.
         if (!introReceived) {
           this.removeListener("message", handleIntro);
           reject(
@@ -189,11 +221,13 @@ export class RDPClient extends EventEmitter {
             )
           );
         }
-        this.handleClose();
+        if (isCurrent()) this.handleClose();
       });
-      this.socket.on("timeout", () => this.handleTimeout());
+      socket.on("timeout", () => {
+        if (isCurrent()) this.handleTimeout();
+      });
 
-      this.socket.setTimeout(this.options.timeout);
+      socket.setTimeout(this.options.timeout);
     });
   }
 
@@ -209,9 +243,17 @@ export class RDPClient extends EventEmitter {
       this.socket = null;
     }
     this.state = createConnectionState();
+    this.failPending("Connection closed");
+  }
+
+  /**
+   * Fail every request still waiting on the current connection and forget its
+   * tombstones: nothing more can arrive for them.
+   */
+  private failPending(reason: string): void {
     this.pendingRequests.forEach((req) => {
       clearTimeout(req.timeout);
-      req.reject(new Error("Connection closed"));
+      req.reject(new Error(reason));
     });
     this.pendingRequests.clear();
   }
@@ -441,9 +483,15 @@ export class RDPClient extends EventEmitter {
     return new Promise((resolve, reject) => {
       const messageId = `msg-${++this.messageIdCounter}`;
 
-      // Set up timeout
+      // Set up timeout. The entry is not deleted: the actor still owes its
+      // reply, and an actor answers its requests in order, so the next reply
+      // from it is this request's. Deleting the entry handed that late reply
+      // to the next request sent to the same actor (#35); the tombstone takes
+      // it instead, and for evaluateJSAsync stays until the evaluationResult
+      // carrying the acknowledged resultID arrives.
       const timeout = setTimeout(() => {
-        this.pendingRequests.delete(messageId);
+        const pending = this.pendingRequests.get(messageId);
+        if (pending) pending.timedOut = true;
         reject(new Error(`Request timeout for ${message.type} to ${message.to}`));
       }, this.options.timeout);
 
@@ -684,8 +732,25 @@ export class RDPClient extends EventEmitter {
   /**
    * Reconnect to the RDP server, clearing all cached state
    * Based on research: Firefox requires full disconnect/reconnect, not just reconnect
+   *
+   * Shared like connect(): a caller that arrives while a reconnect or a
+   * connection attempt is in flight waits for it. reconnect() begins with
+   * disconnect(), which destroys whatever socket is current, so a second
+   * reconnect started during the first one's handshake used to destroy that
+   * attempt, and its caller reported a failed reconnection while Zotero was
+   * up (#35).
    */
-  private async reconnect(): Promise<void> {
+  private reconnect(): Promise<void> {
+    if (this.reconnecting) return this.reconnecting;
+    if (this.connecting) return this.connecting;
+    this.reconnecting = this.disconnectAndConnect().finally(() => {
+      this.reconnecting = null;
+    });
+    return this.reconnecting;
+  }
+
+  /** The reconnect itself. Only reconnect() calls this. */
+  private async disconnectAndConnect(): Promise<void> {
     // Clear all cached state - actors are definitely invalid after reconnect
     this.invalidateActorCache();
     this.state.root = undefined;
@@ -928,7 +993,8 @@ export class RDPClient extends EventEmitter {
     const [messageId, pending] = match;
 
     // evaluateJSAsync acknowledgment: { from, resultID }. Remember the ID and
-    // keep waiting for the "evaluationResult" that carries it.
+    // keep waiting for the "evaluationResult" that carries it. A tombstone
+    // records it too, so that result is recognised as late when it comes.
     if (
       pending.type === "evaluateJSAsync" &&
       pending.resultID === undefined &&
@@ -944,6 +1010,12 @@ export class RDPClient extends EventEmitter {
     clearTimeout(pending.timeout);
     this.pendingRequests.delete(messageId);
 
+    if (pending.timedOut) {
+      // The late reply of a request whose caller already got a timeout.
+      this.emit("lateReply", message);
+      return;
+    }
+
     if ("error" in message) {
       pending.reject(new Error((message as RDPErrorResponse).message || message.error as string));
     } else {
@@ -957,10 +1029,17 @@ export class RDPClient extends EventEmitter {
    * - An "evaluationResult" belongs to the evaluateJSAsync whose
    *   acknowledgment carried the same resultID.
    * - Any other reply belongs to the oldest request sent to the actor it
-   *   comes `from` that is still waiting for its direct reply.
-   * - A reply whose `from` matches no pending request falls back to the oldest
-   *   such request, the behaviour before per-actor matching, so a reply from
-   *   an actor that answers under another name is not dropped.
+   *   comes `from` that is still waiting for its direct reply. That may be a
+   *   tombstone: a request that timed out still holds its place in its
+   *   actor's order.
+   * - A packet from an actor with no request pending is an event. Firefox's
+   *   DevTools server sends every reply `from` the actor the request was
+   *   addressed `to`, noSuchActor errors included, and queues each actor's
+   *   replies in request order (DevToolsServerConnection.onPacket and
+   *   _queueResponse in devtools-server-connection.js). The fallback this
+   *   replaces gave such a packet to the oldest request to any actor, so a
+   *   notification whose type is missing from EVENT_TYPES resolved an
+   *   unrelated request.
    */
   private findPendingFor(message: RDPResponse): [string, PendingRequest] | undefined {
     if (message.type === "evaluationResult" && "resultID" in message) {
@@ -971,13 +1050,11 @@ export class RDPClient extends EventEmitter {
       return undefined;
     }
 
-    let oldestAwaitingReply: [string, PendingRequest] | undefined;
     for (const entry of this.pendingRequests) {
       if (entry[1].resultID !== undefined) continue; // acknowledged; waits for evaluationResult
       if (entry[1].to === message.from) return entry;
-      oldestAwaitingReply ??= entry;
     }
-    return oldestAwaitingReply;
+    return undefined;
   }
 
   /**
@@ -1010,11 +1087,7 @@ export class RDPClient extends EventEmitter {
     // Fail pending requests immediately - their replies can never arrive on
     // a closed socket. They previously sat out the full request timeout
     // (30s by default) before erroring.
-    this.pendingRequests.forEach((req) => {
-      clearTimeout(req.timeout);
-      req.reject(new Error("Connection closed before a reply arrived"));
-    });
-    this.pendingRequests.clear();
+    this.failPending("Connection closed before a reply arrived");
 
     if (wasConnected) {
       this.emit("disconnected");

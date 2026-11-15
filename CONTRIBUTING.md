@@ -49,6 +49,7 @@ Tests live in `packages/mcp-server/tests/`, flat, one file per tool or per part 
 packages/mcp-server/tests/
 ├── ping.test.mts           # zotero_ping: reply shapes from a fake client, plus a live round trip
 ├── concurrency.test.mts    # RDP client: parallel calls against a live Zotero, handshake against a scripted server
+├── rdp-client.test.mts     # RDP client: late replies, the fallback, overlapping reconnects and replaced sockets, against a scripted server
 └── db-stats.test.mts       # zotero_db_stats over MCP stdio against a live Zotero (rebuilds dist/ first)
 ```
 

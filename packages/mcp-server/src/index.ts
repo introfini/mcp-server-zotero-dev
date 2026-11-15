@@ -97,6 +97,14 @@ import {
   handleDbSchema,
   handleDbStats,
 } from "./tools/database.js";
+import {
+  instanceSetupTool,
+  instanceListTool,
+  handleInstanceSetup,
+  handleInstanceList,
+  type InstanceToolContext,
+} from "./tools/instance.js";
+import { currentHostEnv } from "./utils/instance.js";
 import { allPrompts, getPromptHandler } from "./prompts/index.js";
 
 // Read the version from package.json so the MCP handshake (serverInfo.version)
@@ -150,6 +158,16 @@ export function getConfig(): Config {
   return config;
 }
 
+/** What zotero_instance_setup / zotero_instance_list need from this server. */
+function instanceContext(): InstanceToolContext {
+  return {
+    host: currentHostEnv(),
+    configuredPort: config.rdp.port,
+    profilePath: config.zotero.profilePath,
+    serverVersion,
+  };
+}
+
 // Ping tool definition
 // Collect all tools
 const allTools: Tool[] = [
@@ -181,6 +199,8 @@ const allTools: Tool[] = [
   dbQueryTool,
   dbSchemaTool,
   dbStatsTool,
+  instanceSetupTool,
+  instanceListTool,
 ];
 
 // Register tool listing handler
@@ -305,6 +325,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         break;
       case "zotero_db_stats":
         content = await handleDbStats();
+        break;
+
+      // Instance tools (no RDP: they write or read profile directories)
+      case "zotero_instance_setup":
+        content = await handleInstanceSetup(args as Record<string, unknown>, instanceContext());
+        break;
+      case "zotero_instance_list":
+        content = await handleInstanceList(args as Record<string, unknown>, instanceContext());
         break;
 
       default:

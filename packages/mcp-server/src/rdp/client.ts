@@ -98,6 +98,8 @@ export class RDPClient extends EventEmitter {
   // The connection attempt in flight, shared by every caller that arrives
   // before it settles (see connect()).
   private connecting: Promise<void> | null = null;
+  // The reconnect in flight, shared the same way (see reconnect()).
+  private reconnecting: Promise<void> | null = null;
 
   constructor(options: Partial<RDPClientOptions> = {}) {
     super();
@@ -696,8 +698,25 @@ export class RDPClient extends EventEmitter {
   /**
    * Reconnect to the RDP server, clearing all cached state
    * Based on research: Firefox requires full disconnect/reconnect, not just reconnect
+   *
+   * Shared like connect(): a caller that arrives while a reconnect or a
+   * connection attempt is in flight waits for it. reconnect() begins with
+   * disconnect(), which destroys whatever socket is current, so a second
+   * reconnect started during the first one's handshake used to destroy that
+   * attempt, and its caller reported a failed reconnection while Zotero was
+   * up (#35).
    */
-  private async reconnect(): Promise<void> {
+  private reconnect(): Promise<void> {
+    if (this.reconnecting) return this.reconnecting;
+    if (this.connecting) return this.connecting;
+    this.reconnecting = this.disconnectAndConnect().finally(() => {
+      this.reconnecting = null;
+    });
+    return this.reconnecting;
+  }
+
+  /** The reconnect itself. Only reconnect() calls this. */
+  private async disconnectAndConnect(): Promise<void> {
     // Clear all cached state - actors are definitely invalid after reconnect
     this.invalidateActorCache();
     this.state.root = undefined;

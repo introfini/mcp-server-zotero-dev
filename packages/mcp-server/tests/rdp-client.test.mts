@@ -111,6 +111,27 @@ function mainThread(): { reply(send: () => void): void; release(): void } {
   };
 }
 
+let evaluations = 0;
+
+/**
+ * Answers what evaluateJS() sends, in the shapes Zotero uses (actor names
+ * shortened): getRoot, listProcesses, getTarget, and evaluateJSAsync answered
+ * twice, an acknowledgment then an evaluationResult. The result is the code.
+ */
+function zoteroLike(conn: Conn, msg: Packet): void {
+  if (msg.type === "getRoot") {
+    conn.send(INTRO);
+  } else if (msg.type === "listProcesses") {
+    conn.send({ from: "root", processes: [{ actor: "process1", isParent: true }] });
+  } else if (msg.type === "getTarget") {
+    conn.send({ from: msg.to, process: { actor: "target1", consoleActor: "console1" } });
+  } else if (msg.type === "evaluateJSAsync") {
+    const resultID = `e${++evaluations}`;
+    conn.send({ from: msg.to, resultID });
+    conn.send({ from: msg.to, type: "evaluationResult", resultID, result: msg.text });
+  }
+}
+
 function clientFor(port: number, timeout = 2000): RDPClient {
   const client = new RDPClient({ host: "127.0.0.1", port, timeout });
   client.setKeepaliveEnabled(false);
@@ -207,5 +228,29 @@ describe("a packet from an actor with no request pending", () => {
     const reply = await client.sendMessage({ to: "root", type: "listProcesses" });
     expect(reply.processes).toEqual([{ actor: "process1", isParent: true }]);
     expect(events).toEqual([notification]);
+  });
+});
+
+describe("overlapping reconnects (#35 item 2)", () => {
+  it("share one attempt instead of tearing down each other's", async () => {
+    // Every connection after the first waits 300 ms for its intro (a busy
+    // Zotero). Two evaluations find the connection down 150 ms apart, so the
+    // second arrives after reconnect()'s 100 ms pause, while the first one's
+    // attempt is still waiting for the intro. Before the fix the second
+    // reconnect() began with disconnect(), which destroyed that attempt: the
+    // first evaluation failed with "closed before Zotero answered" while
+    // Zotero was up.
+    const server = await rdpServer(zoteroLike, { introDelayMs: (i) => (i === 0 ? 0 : 300) });
+    const client = clientFor(server.port);
+    await client.connect();
+    client.disconnect();
+
+    const first = client.evaluateJS("first");
+    await delay(150);
+    const second = client.evaluateJS("second");
+    const [a, b] = await Promise.all([first, second]);
+    expect(a.result).toBe("first");
+    expect(b.result).toBe("second");
+    expect(server.conns).toHaveLength(2); // the first connection and one reconnect
   });
 });

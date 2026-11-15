@@ -16,7 +16,7 @@
  *
  * The stdio cases drive the built server the way an MCP client does: the
  * trigger is zotero_click_element on a button whose click handler calls
- * Services.prompt.confirmEx.
+ * Services.prompt.confirmEx, and closing the client disarms the handler.
  */
 import { execSync } from "node:child_process";
 import { dirname, join } from "node:path";
@@ -34,6 +34,7 @@ import {
   handleDialogWithClient,
   handleOpenCode,
   parseDialogArgs,
+  releaseDialogHandler,
   statusCode,
   STATE_KEY,
   type DialogClient,
@@ -229,6 +230,22 @@ describe("zotero_handle_dialog handler (fake client)", () => {
     await expect(handleDialogWithClient(client, { action: "status" })).rejects.toThrow(
       /Dialog handler evaluation failed: ReferenceError: Zotero is not defined/
     );
+  });
+
+  it("disarms its own armed handler on release, and nothing once it ended", async () => {
+    const now = Date.now();
+    const armed = summary({ id: 9, state: "armed", endReason: null, endedAt: null, handled: [], expiresAt: now + 60_000 });
+    const client = fakeClient((code) => json(code === statusCode() ? { handler: summary({ id: 9 }) } : { handler: armed, replaced: null }));
+    await handleDialogWithClient(client, { action: "arm" });
+    await releaseDialogHandler(client);
+    expect(client.sent.at(-1)).toBe(disarmCode(9));
+
+    // Once a status shows it ended, there is nothing left to release.
+    await handleDialogWithClient(client, { action: "arm" });
+    await handleDialogWithClient(client, { action: "status" });
+    const before = client.sent.length;
+    await releaseDialogHandler(client);
+    expect(client.sent.length).toBe(before);
   });
 });
 
@@ -517,4 +534,13 @@ describe.skipIf(!ready.client)("zotero_handle_dialog over MCP stdio", () => {
     }
   }, 20_000);
 
+  it("disarms the handler it armed when the client closes", async () => {
+    const mcp = await start();
+    const armed = await call(mcp, "zotero_handle_dialog", { timeoutMs: 60_000 });
+    const id = Number(armed.match(/#(\d+)/)?.[1]);
+    // close() ends stdin, waits up to 2 s, then signals the process. The
+    // server releases its handler on stdin end; a Windows kill runs no handler.
+    await mcp.close();
+    expect(await tool(client, { action: "status" })).toMatch(new RegExp(`^Dialog handler #${id}: disarmed, 0 of 1 handled`));
+  }, 20_000);
 });

@@ -554,6 +554,12 @@ export interface DialogClient {
   gripToValueAsync(grip: GripValue): Promise<unknown>;
 }
 
+/**
+ * The handler this server process armed and has not seen end, so a clean
+ * shutdown can disarm it instead of leaving it to its timeout.
+ */
+let lease: { id: number; expiresAt: number } | null = null;
+
 async function evalJson<T>(client: DialogClient, code: string): Promise<T> {
   const response = await client.evaluateJS(code);
   if (response.exception || response.exceptionMessage) {
@@ -566,6 +572,16 @@ async function evalJson<T>(client: DialogClient, code: string): Promise<T> {
   return JSON.parse(raw) as T;
 }
 
+function track(s: HandlerSummary | null): void {
+  if (!s) {
+    lease = null;
+  } else if (s.state === "armed") {
+    lease = { id: s.id, expiresAt: s.expiresAt };
+  } else if (lease && lease.id === s.id) {
+    lease = null;
+  }
+}
+
 export async function handleDialogWithClient(
   client: DialogClient,
   args: Record<string, unknown>
@@ -574,10 +590,12 @@ export async function handleDialogWithClient(
 
   if (action === "arm") {
     const r = await evalJson<{ handler: HandlerSummary; replaced: HandlerSummary | null }>(client, armCode(options));
+    track(r.handler);
     return [{ type: "text", text: formatArmed(r.handler, r.replaced) }];
   }
   if (action === "status" || action === "disarm") {
     const r = await evalJson<{ handler: HandlerSummary | null }>(client, action === "status" ? statusCode() : disarmCode());
+    track(r.handler);
     return [{ type: "text", text: formatSummary(r.handler) }];
   }
   const r = await evalJson<{ open: number; acted: DialogEntry[]; skipped: DialogEntry[] }>(client, handleOpenCode(options));
@@ -589,3 +607,20 @@ export async function handleDialog(args: Record<string, unknown>): Promise<TextC
   return handleDialogWithClient(await getRdpClient(), args);
 }
 
+/**
+ * Best effort, for server shutdown: disarm the handler this process armed if
+ * its timeout has not passed yet. Bounded by `waitMs`; never throws.
+ */
+export async function releaseDialogHandler(client: DialogClient, waitMs = 1000): Promise<void> {
+  const held = lease;
+  if (!held || Date.now() >= held.expiresAt) return;
+  lease = null;
+  try {
+    await Promise.race([
+      client.evaluateJS(disarmCode(held.id)),
+      new Promise((resolve) => setTimeout(resolve, waitMs).unref()),
+    ]);
+  } catch {
+    // Zotero gone or unreachable: the handler's own timeout still ends it.
+  }
+}

@@ -64,6 +64,7 @@ import {
 import {
   handleDialogTool,
   handleDialog,
+  releaseDialogHandler,
 } from "./tools/dialog.js";
 import {
   readLogsTool,
@@ -350,19 +351,26 @@ async function main() {
   console.error("MCP Server Zotero Dev running");
 }
 
-// Handle shutdown
-process.on("SIGINT", () => {
+// Handle shutdown. A dialog handler this server armed is disarmed first
+// (bounded, best effort); its own timeout covers the cases where this cannot
+// run, e.g. a kill on Windows, where SIGTERM terminates without handlers.
+async function shutdown(): Promise<void> {
   if (rdpClient) {
+    await releaseDialogHandler(rdpClient);
     rdpClient.disconnect();
   }
   process.exit(0);
-});
+}
 
-process.on("SIGTERM", () => {
-  if (rdpClient) {
-    rdpClient.disconnect();
+process.on("SIGINT", () => void shutdown());
+process.on("SIGTERM", () => void shutdown());
+
+// MCP clients close stdin first when they stop a stdio server (and only then
+// signal it), so this is the hook that also runs on Windows.
+process.stdin.once("end", () => {
+  if (rdpClient?.isConnected()) {
+    void releaseDialogHandler(rdpClient);
   }
-  process.exit(0);
 });
 
 // Run

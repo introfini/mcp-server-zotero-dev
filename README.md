@@ -126,7 +126,7 @@ That's it! No special launch flags, no configuration. 🎉
 
 ---
 
-## 🧰 Available Tools (28 total)
+## 🧰 Available Tools (30 total)
 
 <details>
 <summary><strong>UI Inspection</strong> — Screenshots, DOM, styles</summary>
@@ -218,6 +218,18 @@ That's it! No special launch flags, no configuration. 🎉
 | `zotero_db_stats` | Get database statistics (items, attachments, collections, size) |
 
 > **Note**: Database access is read-only and requires Zotero to be closed, or uses a copy of the database.
+
+</details>
+
+<details>
+<summary><strong>Instances</strong> — A second Zotero to test against</summary>
+
+| Tool | Description |
+|------|-------------|
+| `zotero_instance_setup` | Create a separate instance: new profile, empty data directory, its own bridge and HTTP ports, bridge sideloaded enabled. Returns the launch command and the MCP server entry; does not start Zotero |
+| `zotero_instance_list` | List Zotero installations, the instances made by `zotero_instance_setup` and the profile manager's profiles, with their configured ports |
+
+> Neither tool needs a running Zotero. See [Actually running two instances](#actually-running-two-instances).
 
 </details>
 
@@ -322,6 +334,8 @@ MOZ_NO_REMOTE=1 "/Applications/Zotero.app/Contents/MacOS/zotero" -P <profile-nam
 ```
 
 Give that profile its own `extensions.mcp-rdp.port` and the two bridges stay out of each other's way. Verified with 9.0.6 on 6100 and 10.0-beta.22 on 6101 at the same time.
+
+**Or let the server set it up.** `zotero_instance_setup` (name, bridge port, and optionally the Zotero executable and the bridge XPI) does all of the above in one call, without the profile manager: it creates `<parentDir>/<name>/profile` and an empty `<parentDir>/<name>/data` (default parent: `zotero-dev-instances` in your home directory), writes a `user.js` with the instance's own data directory, bridge port and HTTP port (sync off), and copies the bridge into the profile with `extensions.autoDisableScopes` set to `0` so that it starts **enabled** (a sideloaded XPI is otherwise left disabled). It refuses port 6100, ports in use or configured in another profile, a bridge older than 1.0.5, and any existing directory it did not create. It does not start Zotero: it returns the launch command and a second `mcpServers` entry with `ZOTERO_RDP_PORT`, `ZOTERO_DATA_DIR` and `ZOTERO_PROFILE_PATH` pointing at the new instance. `zotero_instance_list` shows what already exists.
 
 > **Requires MCP Bridge plugin 1.0.5 or later.** In 1.0.4 and earlier, `extensions.mcp-rdp.port` was read under the wrong preference branch and silently ignored, so the bridge stayed on 6100 no matter what you set. If you configured a custom port against an older build, it is stored as `extensions.zotero.extensions.mcp-rdp.port` — that name still works, but prefer the one above.
 

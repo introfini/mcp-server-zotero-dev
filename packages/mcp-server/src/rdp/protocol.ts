@@ -118,6 +118,13 @@ export interface EvaluateJSResponse extends RDPResponse {
   result?: GripValue;
   exception?: GripValue;
   exceptionMessage?: string;
+  /**
+   * The evaluation returned a promise that rejected. The reply then carries
+   * neither `result` nor `exception`: the DevTools server leaves the
+   * rejection to the engine ("it will report a `uncaught exception` error",
+   * webconsole.js _maybeWaitForResponseResult), so its reason is not here.
+   */
+  topLevelAwaitRejected?: boolean;
   helperResult?: unknown;
   timestamp?: number;
 }

@@ -72,6 +72,12 @@ interface PendingRequest {
    * itself arrives later as an "evaluationResult" carrying the same ID.
    */
   resultID?: string;
+  /**
+   * The request timed out and its caller has been told so; the entry stays
+   * as a tombstone until the reply the actor still owes arrives, and that
+   * reply is then dropped (see sendMessage()).
+   */
+  timedOut?: boolean;
 }
 
 export class RDPClient extends EventEmitter {
@@ -441,9 +447,15 @@ export class RDPClient extends EventEmitter {
     return new Promise((resolve, reject) => {
       const messageId = `msg-${++this.messageIdCounter}`;
 
-      // Set up timeout
+      // Set up timeout. The entry is not deleted: the actor still owes its
+      // reply, and an actor answers its requests in order, so the next reply
+      // from it is this request's. Deleting the entry handed that late reply
+      // to the next request sent to the same actor (#35); the tombstone takes
+      // it instead, and for evaluateJSAsync stays until the evaluationResult
+      // carrying the acknowledged resultID arrives.
       const timeout = setTimeout(() => {
-        this.pendingRequests.delete(messageId);
+        const pending = this.pendingRequests.get(messageId);
+        if (pending) pending.timedOut = true;
         reject(new Error(`Request timeout for ${message.type} to ${message.to}`));
       }, this.options.timeout);
 
@@ -928,7 +940,8 @@ export class RDPClient extends EventEmitter {
     const [messageId, pending] = match;
 
     // evaluateJSAsync acknowledgment: { from, resultID }. Remember the ID and
-    // keep waiting for the "evaluationResult" that carries it.
+    // keep waiting for the "evaluationResult" that carries it. A tombstone
+    // records it too, so that result is recognised as late when it comes.
     if (
       pending.type === "evaluateJSAsync" &&
       pending.resultID === undefined &&
@@ -944,6 +957,12 @@ export class RDPClient extends EventEmitter {
     clearTimeout(pending.timeout);
     this.pendingRequests.delete(messageId);
 
+    if (pending.timedOut) {
+      // The late reply of a request whose caller already got a timeout.
+      this.emit("lateReply", message);
+      return;
+    }
+
     if ("error" in message) {
       pending.reject(new Error((message as RDPErrorResponse).message || message.error as string));
     } else {
@@ -957,10 +976,14 @@ export class RDPClient extends EventEmitter {
    * - An "evaluationResult" belongs to the evaluateJSAsync whose
    *   acknowledgment carried the same resultID.
    * - Any other reply belongs to the oldest request sent to the actor it
-   *   comes `from` that is still waiting for its direct reply.
+   *   comes `from` that is still waiting for its direct reply. That may be a
+   *   tombstone: a request that timed out still holds its place in its
+   *   actor's order.
    * - A reply whose `from` matches no pending request falls back to the oldest
    *   such request, the behaviour before per-actor matching, so a reply from
-   *   an actor that answers under another name is not dropped.
+   *   an actor that answers under another name is not dropped. Tombstones
+   *   are left out of that fallback: a stray packet must not consume the
+   *   place of a reply that is still on its way.
    */
   private findPendingFor(message: RDPResponse): [string, PendingRequest] | undefined {
     if (message.type === "evaluationResult" && "resultID" in message) {
@@ -975,7 +998,7 @@ export class RDPClient extends EventEmitter {
     for (const entry of this.pendingRequests) {
       if (entry[1].resultID !== undefined) continue; // acknowledged; waits for evaluationResult
       if (entry[1].to === message.from) return entry;
-      oldestAwaitingReply ??= entry;
+      if (!entry[1].timedOut) oldestAwaitingReply ??= entry;
     }
     return oldestAwaitingReply;
   }

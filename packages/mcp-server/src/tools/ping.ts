@@ -19,6 +19,7 @@
  */
 import type { Tool, TextContent } from "@modelcontextprotocol/sdk/types.js";
 import type { EvaluateJSResponse, GripValue } from "../rdp/index.js";
+import { getRdpClient } from "../rdp/session.js";
 
 export const pingTool: Tool = {
   name: "zotero_ping",
@@ -162,13 +163,10 @@ export function pingFailureText(message: string, port: number): TextContent[] {
 }
 
 /**
- * Handle the ping tool. `getRdpClient` is imported lazily so that this module
- * can be loaded by tests without starting the MCP server (index.ts runs
- * main() on import).
+ * Handle the ping tool.
  */
 export async function handlePing(port: number): Promise<TextContent[]> {
   try {
-    const { getRdpClient } = await import("../index.js");
     const client = await getRdpClient();
     return await pingWithClient(client, port);
   } catch (error) {

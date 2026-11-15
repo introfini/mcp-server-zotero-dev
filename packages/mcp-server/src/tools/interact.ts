@@ -24,7 +24,7 @@
  */
 
 import type { Tool, TextContent } from "@modelcontextprotocol/sdk/types.js";
-import { getRdpClient } from "../index.js";
+import { getRdpClient } from "../rdp/session.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared helper: resolve the target window inside the evaluated snippet.

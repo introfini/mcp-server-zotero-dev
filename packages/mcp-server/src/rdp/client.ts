@@ -72,6 +72,12 @@ interface PendingRequest {
    * itself arrives later as an "evaluationResult" carrying the same ID.
    */
   resultID?: string;
+  /**
+   * The request timed out and its caller has been told so; the entry stays
+   * as a tombstone until the reply the actor still owes arrives, and that
+   * reply is then dropped (see sendMessage()).
+   */
+  timedOut?: boolean;
 }
 
 export class RDPClient extends EventEmitter {
@@ -92,6 +98,8 @@ export class RDPClient extends EventEmitter {
   // The connection attempt in flight, shared by every caller that arrives
   // before it settles (see connect()).
   private connecting: Promise<void> | null = null;
+  // The reconnect in flight, shared the same way (see reconnect()).
+  private reconnecting: Promise<void> | null = null;
 
   constructor(options: Partial<RDPClientOptions> = {}) {
     super();
@@ -130,10 +138,52 @@ export class RDPClient extends EventEmitter {
     return new Promise((resolve, reject) => {
       let introReceived = false;
 
+      // A socket still set here is one that isConnected() or a socket error
+      // counted as down without destroying it. Destroy it before replacing
+      // it, and carry nothing of its connection over (#35): its requests can
+      // no longer be answered, its tombstones and actors belong to it, and a
+      // partial packet left in the framing buffer would corrupt the new
+      // stream.
+      if (this.socket) {
+        const previous = this.socket;
+        this.socket = null;
+        previous.destroy();
+        this.failPending("Connection closed before a reply arrived");
+      }
+      this.invalidateActorCache();
+      this.buffer = Buffer.alloc(0);
+
+      const socket = createConnection({
+        host: this.options.host,
+        port: this.options.port,
+      });
+      this.socket = socket;
+      // Every handler below acts only while `socket` is the current one. They
+      // used to act on the client whichever socket fired: the close of a
+      // replaced socket nulled the new one and failed its requests, and its
+      // late data went into the new connection's framing buffer (#35).
+      const isCurrent = () => this.socket === socket;
+
+      // A port that accepts the TCP connection but never sends the intro (not
+      // a DevTools server, or one that is stuck) must fail the attempt. The
+      // socket's inactivity timeout did that until it was removed (below).
+      const introTimer = setTimeout(() => {
+        if (introReceived) return;
+        this.removeListener("message", handleIntro);
+        if (isCurrent()) this.disconnect();
+        reject(
+          new Error(
+            `No RDP greeting from ${this.options.host}:${this.options.port} within ` +
+              `${this.options.timeout / 1000} s. Is it the MCP Bridge for Zotero's port?`
+          )
+        );
+      }, this.options.timeout);
+
       // Handler for the intro packet that arrives immediately after connection
       const handleIntro = (message: RDPResponse) => {
-        if (!introReceived && "applicationType" in message) {
+        if (!introReceived && isCurrent() && "applicationType" in message) {
           introReceived = true;
+          clearTimeout(introTimer);
           this.state.root = {
             actorID: "root",
             applicationType: message.applicationType as string,
@@ -158,28 +208,28 @@ export class RDPClient extends EventEmitter {
       // Listen for the intro packet
       this.on("message", handleIntro);
 
-      this.socket = createConnection({
-        host: this.options.host,
-        port: this.options.port,
-      });
-
       // Do NOT call setEncoding('utf8') — the RDP protocol uses byte-length
       // prefixes, so we must work with raw Buffers for correct framing.
 
       // Enable TCP keepalive to detect dead connections faster
       // This is crucial for detecting when Zotero closes unexpectedly
-      this.socket.setKeepAlive(true, 10000); // 10 second keepalive probe
+      socket.setKeepAlive(true, 10000); // 10 second keepalive probe
 
-      this.socket.on("data", (data: Buffer) => this.handleData(data));
-      this.socket.on("error", (err) => {
-        this.removeListener("message", handleIntro);
-        this.handleError(err, reject);
+      socket.on("data", (data: Buffer) => {
+        if (isCurrent()) this.handleData(data);
       });
-      this.socket.on("close", () => {
+      socket.on("error", (err) => {
+        clearTimeout(introTimer);
+        this.removeListener("message", handleIntro);
+        // A replaced socket's attempt is failed by its close, which follows.
+        if (isCurrent()) this.handleError(err, reject);
+      });
+      socket.on("close", () => {
+        clearTimeout(introTimer);
         // A close before the intro packet (bridge restarting, disconnect() or
-        // a socket timeout mid-handshake) must fail this attempt, or the
-        // attempt connect() shares would never settle and every later call
-        // would wait on it.
+        // the greeting timeout above) must fail this attempt, or the attempt
+        // connect() shares would never settle and every later call would
+        // wait on it. That holds for a replaced socket too.
         if (!introReceived) {
           this.removeListener("message", handleIntro);
           reject(
@@ -189,11 +239,16 @@ export class RDPClient extends EventEmitter {
             )
           );
         }
-        this.handleClose();
+        if (isCurrent()) this.handleClose();
       });
-      this.socket.on("timeout", () => this.handleTimeout());
 
-      this.socket.setTimeout(this.options.timeout);
+      // No socket inactivity timeout. It was the request timeout, so an
+      // evaluation that ran past it left the socket idle that long and the
+      // connection was torn down under it: the next call failed with "Not
+      // connected to Zotero" while the code was still running in Zotero. A
+      // dead peer is found by TCP keepalive (above) and the health check;
+      // each request keeps its own timeout, and the late reply of one that
+      // timed out goes to its tombstone (see sendMessage()).
     });
   }
 
@@ -209,9 +264,17 @@ export class RDPClient extends EventEmitter {
       this.socket = null;
     }
     this.state = createConnectionState();
+    this.failPending("Connection closed");
+  }
+
+  /**
+   * Fail every request still waiting on the current connection and forget its
+   * tombstones: nothing more can arrive for them.
+   */
+  private failPending(reason: string): void {
     this.pendingRequests.forEach((req) => {
       clearTimeout(req.timeout);
-      req.reject(new Error("Connection closed"));
+      req.reject(new Error(reason));
     });
     this.pendingRequests.clear();
   }
@@ -426,9 +489,13 @@ export class RDPClient extends EventEmitter {
   }
 
   /**
-   * Send a raw RDP message and wait for response
+   * Send a raw RDP message and wait for response, at most `timeoutMs`
+   * (default: the client's timeout).
    */
-  async sendMessage<T extends RDPResponse>(message: Record<string, unknown>): Promise<T> {
+  async sendMessage<T extends RDPResponse>(
+    message: Record<string, unknown>,
+    timeoutMs: number = this.options.timeout
+  ): Promise<T> {
     if (!this.socket || !this.state.connected) {
       throw new Error(
         "Not connected to Zotero. Ensure:\n" +
@@ -441,11 +508,17 @@ export class RDPClient extends EventEmitter {
     return new Promise((resolve, reject) => {
       const messageId = `msg-${++this.messageIdCounter}`;
 
-      // Set up timeout
+      // Set up timeout. The entry is not deleted: the actor still owes its
+      // reply, and an actor answers its requests in order, so the next reply
+      // from it is this request's. Deleting the entry handed that late reply
+      // to the next request sent to the same actor (#35); the tombstone takes
+      // it instead, and for evaluateJSAsync stays until the evaluationResult
+      // carrying the acknowledged resultID arrives.
       const timeout = setTimeout(() => {
-        this.pendingRequests.delete(messageId);
+        const pending = this.pendingRequests.get(messageId);
+        if (pending) pending.timedOut = true;
         reject(new Error(`Request timeout for ${message.type} to ${message.to}`));
-      }, this.options.timeout);
+      }, timeoutMs);
 
       this.pendingRequests.set(messageId, {
         resolve: resolve as (value: RDPResponse) => void,
@@ -568,15 +641,23 @@ export class RDPClient extends EventEmitter {
    * - Actor cache invalidation after TTL expires
    * - Automatic reconnection on recoverable errors
    * - Exponential backoff for consecutive failures
+   *
+   * `opts.timeoutMs` lets one evaluation wait longer (or shorter) than the
+   * client's timeout.
    */
-  async evaluateJS(code: string, retryCount = 0): Promise<EvaluateJSResponse> {
+  async evaluateJS(
+    code: string,
+    opts: { timeoutMs?: number } = {},
+    retryCount = 0
+  ): Promise<EvaluateJSResponse> {
     const maxRetries = 2;
+    const timeoutMs = opts.timeoutMs ?? this.options.timeout;
 
     // Check connection state and reconnect if needed
     if (!this.isConnected()) {
       if (retryCount < maxRetries) {
         await this.reconnect();
-        return this.evaluateJS(code, retryCount + 1);
+        return this.evaluateJS(code, opts, retryCount + 1);
       }
       throw new Error(
         "Not connected to Zotero. Ensure:\n" +
@@ -592,7 +673,7 @@ export class RDPClient extends EventEmitter {
       const healthy = await this.checkHealth();
       if (!healthy) {
         await this.reconnect();
-        return this.evaluateJS(code, retryCount + 1);
+        return this.evaluateJS(code, opts, retryCount + 1);
       }
     }
 
@@ -604,7 +685,7 @@ export class RDPClient extends EventEmitter {
 
     // Ensure we have a console actor
     if (!this.state.consoleActor) {
-      await this.ensureConsoleActor();
+      await this.acquireConsoleActor();
       this.consoleActorCachedAt = Date.now();
     }
 
@@ -613,12 +694,15 @@ export class RDPClient extends EventEmitter {
     }
 
     try {
-      const response = await this.sendMessage<EvaluateJSResponse>({
-        to: this.state.consoleActor,
-        type: "evaluateJSAsync",
-        text: code,
-        mapped: { await: true },
-      });
+      const response = await this.sendMessage<EvaluateJSResponse>(
+        {
+          to: this.state.consoleActor,
+          type: "evaluateJSAsync",
+          text: code,
+          mapped: { await: true },
+        },
+        timeoutMs
+      );
 
       // Success! Update health tracking
       this.lastSuccessfulOperation = Date.now();
@@ -628,6 +712,19 @@ export class RDPClient extends EventEmitter {
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.consecutiveFailures++;
+
+      // No answer in time: the code was delivered and is still running in
+      // Zotero (an evaluation cannot be cancelled). The connection stays up,
+      // and the result, when it comes, goes to the request's tombstone
+      // instead of a later call. Re-running blindly would run it twice.
+      if (errorMessage.startsWith("Request timeout for evaluateJSAsync")) {
+        throw new Error(
+          `Zotero did not answer within ${timeoutMs / 1000} s. The code is still running in ` +
+            "Zotero (an evaluation cannot be cancelled), and its result will be discarded when " +
+            "it arrives. Check its effect before running it again; give long operations a " +
+            'larger "timeout".'
+        );
+      }
 
       // Categorize errors based on Firefox RDP research
       const isActorError = errorMessage.includes("No such actor");
@@ -643,7 +740,7 @@ export class RDPClient extends EventEmitter {
         this.invalidateActorCache();
         // Small delay before retry - server may need time to stabilize
         await this.delay(100 * (retryCount + 1));
-        return this.evaluateJS(code, retryCount + 1);
+        return this.evaluateJS(code, opts, retryCount + 1);
       }
 
       // Connection errors: reconnect so the NEXT call works, but DO NOT
@@ -684,8 +781,25 @@ export class RDPClient extends EventEmitter {
   /**
    * Reconnect to the RDP server, clearing all cached state
    * Based on research: Firefox requires full disconnect/reconnect, not just reconnect
+   *
+   * Shared like connect(): a caller that arrives while a reconnect or a
+   * connection attempt is in flight waits for it. reconnect() begins with
+   * disconnect(), which destroys whatever socket is current, so a second
+   * reconnect started during the first one's handshake used to destroy that
+   * attempt, and its caller reported a failed reconnection while Zotero was
+   * up (#35).
    */
-  private async reconnect(): Promise<void> {
+  private reconnect(): Promise<void> {
+    if (this.reconnecting) return this.reconnecting;
+    if (this.connecting) return this.connecting;
+    this.reconnecting = this.disconnectAndConnect().finally(() => {
+      this.reconnecting = null;
+    });
+    return this.reconnecting;
+  }
+
+  /** The reconnect itself. Only reconnect() calls this. */
+  private async disconnectAndConnect(): Promise<void> {
     // Clear all cached state - actors are definitely invalid after reconnect
     this.invalidateActorCache();
     this.state.root = undefined;
@@ -712,7 +826,7 @@ export class RDPClient extends EventEmitter {
     types: string[] = ["ConsoleAPI", "PageError"]
   ): Promise<GetCachedMessagesResponse> {
     if (!this.state.consoleActor) {
-      await this.ensureConsoleActor();
+      await this.acquireConsoleActor();
     }
 
     if (!this.state.consoleActor) {
@@ -724,6 +838,29 @@ export class RDPClient extends EventEmitter {
       type: "getCachedMessages",
       messageTypes: types,
     });
+  }
+
+  /**
+   * ensureConsoleActor(), tried twice more before giving up: after 250 ms,
+   * then after 1 s on a fresh connection. Nothing has been sent for
+   * evaluation at this point, so a retry can never run code twice. "Could
+   * not find Zotero console actor" used to end the call outright, typically
+   * right after a window opened or closed, while a single retry by hand
+   * brought the actor back every time.
+   */
+  private async acquireConsoleActor(): Promise<void> {
+    const delays = [250, 1000];
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await this.ensureConsoleActor();
+        return;
+      } catch (error) {
+        if (attempt >= delays.length) throw error;
+        this.invalidateActorCache();
+        await this.delay(delays[attempt]);
+        if (attempt === delays.length - 1) await this.reconnect();
+      }
+    }
   }
 
   /**
@@ -882,6 +1019,16 @@ export class RDPClient extends EventEmitter {
     "reflowActivity",
     "styleSheetsAdded",
     "styleSheetsRemoved",
+    // The root actor's notifications (devtools/server/actors/root.js sends
+    // them `from` root) and the descriptors' and watcher's. A reply never
+    // carries these types, but a request to the same actor may be pending
+    // when one arrives, and matching by actor would take it as the reply.
+    "tabListChanged",
+    "processListChanged",
+    "addonListChanged",
+    "serviceWorkerRegistrationListChanged",
+    "descriptor-destroyed",
+    "target-destroyed-form",
   ]);
 
   /**
@@ -896,6 +1043,36 @@ export class RDPClient extends EventEmitter {
   ]);
 
   /**
+   * Whether an event means the cached console actor can no longer be used.
+   *
+   * Every frameUpdate used to count, but a target announces its own window
+   * with a frameUpdate (`{frames: [{id, url}]}`) right after getTarget. So the
+   * actor fetched for one call was dropped before the next, every call made
+   * a new ParentProcessTarget, and the old ones lived on for the whole
+   * connection, each sending its own frameUpdate for every window opened or
+   * closed (traced on Zotero 11.0-beta.3: targets 6, 24, 42, 60... one per
+   * call; four events for one window closed after four calls). Now only the
+   * CURRENT target's report that its own window was destroyed counts
+   * (`{frames: [{id, destroy: true}]}` with the target's outerWindowID, or
+   * `destroyAll`); with the id unknown, any destroyed frame of the current
+   * target does. tabNavigated, tabDetached and workerListChanged still count.
+   */
+  private invalidatesConsoleActor(message: RDPResponse): boolean {
+    const type = message.type as string;
+    if (!RDPClient.ACTOR_INVALIDATING_EVENTS.has(type)) return false;
+    if (type !== "frameUpdate") return true;
+    const target = this.state.currentTab;
+    if (!target || message.from !== target.actorID) return false;
+    if (message.destroyAll) return true;
+    const frames = Array.isArray(message.frames)
+      ? (message.frames as Array<{ id?: number; destroy?: boolean }>)
+      : [];
+    return frames.some(
+      (f) => f.destroy === true && (target.outerWindowID === undefined || f.id === target.outerWindowID)
+    );
+  }
+
+  /**
    * Handle a parsed RDP message
    */
   private handleMessage(message: RDPResponse): void {
@@ -905,7 +1082,7 @@ export class RDPClient extends EventEmitter {
     if (messageType && RDPClient.EVENT_TYPES.has(messageType)) {
       // Check if this event invalidates our cached actors
       // Based on research: navigation/detach events make actors stale
-      if (RDPClient.ACTOR_INVALIDATING_EVENTS.has(messageType)) {
+      if (this.invalidatesConsoleActor(message)) {
         this.invalidateActorCache();
         this.emit("actorsInvalidated", messageType);
       }
@@ -928,7 +1105,8 @@ export class RDPClient extends EventEmitter {
     const [messageId, pending] = match;
 
     // evaluateJSAsync acknowledgment: { from, resultID }. Remember the ID and
-    // keep waiting for the "evaluationResult" that carries it.
+    // keep waiting for the "evaluationResult" that carries it. A tombstone
+    // records it too, so that result is recognised as late when it comes.
     if (
       pending.type === "evaluateJSAsync" &&
       pending.resultID === undefined &&
@@ -944,6 +1122,12 @@ export class RDPClient extends EventEmitter {
     clearTimeout(pending.timeout);
     this.pendingRequests.delete(messageId);
 
+    if (pending.timedOut) {
+      // The late reply of a request whose caller already got a timeout.
+      this.emit("lateReply", message);
+      return;
+    }
+
     if ("error" in message) {
       pending.reject(new Error((message as RDPErrorResponse).message || message.error as string));
     } else {
@@ -957,10 +1141,17 @@ export class RDPClient extends EventEmitter {
    * - An "evaluationResult" belongs to the evaluateJSAsync whose
    *   acknowledgment carried the same resultID.
    * - Any other reply belongs to the oldest request sent to the actor it
-   *   comes `from` that is still waiting for its direct reply.
-   * - A reply whose `from` matches no pending request falls back to the oldest
-   *   such request, the behaviour before per-actor matching, so a reply from
-   *   an actor that answers under another name is not dropped.
+   *   comes `from` that is still waiting for its direct reply. That may be a
+   *   tombstone: a request that timed out still holds its place in its
+   *   actor's order.
+   * - A packet from an actor with no request pending is an event. Firefox's
+   *   DevTools server sends every reply `from` the actor the request was
+   *   addressed `to`, noSuchActor errors included, and queues each actor's
+   *   replies in request order (DevToolsServerConnection.onPacket and
+   *   _queueResponse in devtools-server-connection.js). The fallback this
+   *   replaces gave such a packet to the oldest request to any actor, so a
+   *   notification whose type is missing from EVENT_TYPES resolved an
+   *   unrelated request.
    */
   private findPendingFor(message: RDPResponse): [string, PendingRequest] | undefined {
     if (message.type === "evaluationResult" && "resultID" in message) {
@@ -971,13 +1162,11 @@ export class RDPClient extends EventEmitter {
       return undefined;
     }
 
-    let oldestAwaitingReply: [string, PendingRequest] | undefined;
     for (const entry of this.pendingRequests) {
       if (entry[1].resultID !== undefined) continue; // acknowledged; waits for evaluationResult
       if (entry[1].to === message.from) return entry;
-      oldestAwaitingReply ??= entry;
     }
-    return oldestAwaitingReply;
+    return undefined;
   }
 
   /**
@@ -1010,11 +1199,7 @@ export class RDPClient extends EventEmitter {
     // Fail pending requests immediately - their replies can never arrive on
     // a closed socket. They previously sat out the full request timeout
     // (30s by default) before erroring.
-    this.pendingRequests.forEach((req) => {
-      clearTimeout(req.timeout);
-      req.reject(new Error("Connection closed before a reply arrived"));
-    });
-    this.pendingRequests.clear();
+    this.failPending("Connection closed before a reply arrived");
 
     if (wasConnected) {
       this.emit("disconnected");
@@ -1030,14 +1215,6 @@ export class RDPClient extends EventEmitter {
         }, this.options.reconnectDelay);
       }
     }
-  }
-
-  /**
-   * Handle socket timeout
-   */
-  private handleTimeout(): void {
-    this.emit("timeout");
-    this.disconnect();
   }
 
   /**

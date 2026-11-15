@@ -49,6 +49,9 @@ Tests live in `packages/mcp-server/tests/`, flat, one file per tool or per part 
 packages/mcp-server/tests/
 ├── ping.test.mts           # zotero_ping: reply shapes from a fake client, plus a live round trip
 ├── concurrency.test.mts    # RDP client: parallel calls against a live Zotero, handshake against a scripted server
+├── rdp-client.test.mts     # RDP client: late replies, the fallback, overlapping reconnects and replaced sockets, against a scripted server
+├── rdp-live.test.mts       # RDP client: a timed-out evaluation runs once and the next calls get their own results, against a live Zotero
+├── fake-rdp.mts            # not a test: the fake RDP server rdp-client.test.mts uses for timeouts and the console actor
 └── db-stats.test.mts       # zotero_db_stats over MCP stdio against a live Zotero (rebuilds dist/ first)
 ```
 

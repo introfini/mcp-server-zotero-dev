@@ -63,6 +63,15 @@ interface PendingRequest {
   resolve: (value: RDPResponse) => void;
   reject: (error: Error) => void;
   timeout: NodeJS.Timeout;
+  /** Actor the request was sent to; its reply comes back `from` that actor. */
+  to: string;
+  /** Request type, e.g. "evaluateJSAsync". */
+  type: string;
+  /**
+   * For evaluateJSAsync: the resultID from the acknowledgment. The result
+   * itself arrives later as an "evaluationResult" carrying the same ID.
+   */
+  resultID?: string;
 }
 
 export class RDPClient extends EventEmitter {
@@ -80,6 +89,9 @@ export class RDPClient extends EventEmitter {
   private consecutiveFailures = 0;
   private keepaliveTimer: NodeJS.Timeout | null = null;
   private isKeepaliveEnabled = true;
+  // The connection attempt in flight, shared by every caller that arrives
+  // before it settles (see connect()).
+  private connecting: Promise<void> | null = null;
 
   constructor(options: Partial<RDPClientOptions> = {}) {
     super();
@@ -93,12 +105,28 @@ export class RDPClient extends EventEmitter {
    * The server sends an intro packet immediately after connection
    * containing applicationType and traits. We capture this to initialize
    * the root state.
+   *
+   * Concurrent callers share one attempt. MCP clients often send several tool
+   * calls at once as their first action; each reaches here while
+   * isConnected() is still false, and without this guard each opened its own
+   * socket on this client and raced the intro packet, so every call failed.
    */
   async connect(): Promise<void> {
     if (this.state.connected && this.socket) {
       return;
     }
+    if (!this.connecting) {
+      this.connecting = this.openConnection().finally(() => {
+        this.connecting = null;
+      });
+    }
+    return this.connecting;
+  }
 
+  /**
+   * Open the socket and wait for the intro packet. Only connect() calls this.
+   */
+  private openConnection(): Promise<void> {
     return new Promise((resolve, reject) => {
       let introReceived = false;
 
@@ -148,7 +176,22 @@ export class RDPClient extends EventEmitter {
         this.removeListener("message", handleIntro);
         this.handleError(err, reject);
       });
-      this.socket.on("close", () => this.handleClose());
+      this.socket.on("close", () => {
+        // A close before the intro packet (bridge restarting, disconnect() or
+        // a socket timeout mid-handshake) must fail this attempt, or the
+        // attempt connect() shares would never settle and every later call
+        // would wait on it.
+        if (!introReceived) {
+          this.removeListener("message", handleIntro);
+          reject(
+            new Error(
+              `Connection to Zotero RDP at ${this.options.host}:${this.options.port} ` +
+                "closed before Zotero answered. Ensure the MCP Bridge for Zotero plugin is enabled, then retry."
+            )
+          );
+        }
+        this.handleClose();
+      });
       this.socket.on("timeout", () => this.handleTimeout());
 
       this.socket.setTimeout(this.options.timeout);
@@ -409,6 +452,8 @@ export class RDPClient extends EventEmitter {
         resolve: resolve as (value: RDPResponse) => void,
         reject,
         timeout,
+        to: String(message.to),
+        type: String(message.type),
       });
 
       // RDP packet format: <length>:<json>
@@ -871,37 +916,69 @@ export class RDPClient extends EventEmitter {
       return;
     }
 
-    // Skip evaluateJSAsync acknowledgment messages
-    // These have only { resultID, from } and are followed by the actual result
-    // with { type: "evaluationResult", resultID, result, ... }
+    // Correlate the reply with the request it answers. The protocol orders
+    // replies per actor, not across actors, and evaluateJSAsync results can
+    // complete in any order. Handing every reply to the oldest pending request
+    // (the previous approach) gave parallel calls each other's results.
+    const match = this.findPendingFor(message);
+    if (!match) {
+      // Unsolicited message (event)
+      this.emit("message", message);
+      return;
+    }
+    const [messageId, pending] = match;
+
+    // evaluateJSAsync acknowledgment: { from, resultID }. Remember the ID and
+    // keep waiting for the "evaluationResult" that carries it.
     if (
+      pending.type === "evaluateJSAsync" &&
+      pending.resultID === undefined &&
       "resultID" in message &&
       !("type" in message) &&
       !("result" in message) &&
-      Object.keys(message).length <= 2
+      !("error" in message)
     ) {
-      // This is just an acknowledgment, wait for the actual result
+      pending.resultID = String(message.resultID);
       return;
     }
 
-    // RDP responses come from actors, not tied to specific request IDs
-    // We use a simple FIFO approach for request/response correlation
-    // The first pending request gets the response
-    const pendingEntry = this.pendingRequests.entries().next();
-    if (!pendingEntry.done) {
-      const [messageId, pending] = pendingEntry.value;
-      clearTimeout(pending.timeout);
-      this.pendingRequests.delete(messageId);
+    clearTimeout(pending.timeout);
+    this.pendingRequests.delete(messageId);
 
-      if ("error" in message) {
-        pending.reject(new Error((message as RDPErrorResponse).message || message.error as string));
-      } else {
-        pending.resolve(message);
-      }
+    if ("error" in message) {
+      pending.reject(new Error((message as RDPErrorResponse).message || message.error as string));
     } else {
-      // Unsolicited message (event)
-      this.emit("message", message);
+      pending.resolve(message);
     }
+  }
+
+  /**
+   * Find the pending request a message answers, or undefined for an event.
+   *
+   * - An "evaluationResult" belongs to the evaluateJSAsync whose
+   *   acknowledgment carried the same resultID.
+   * - Any other reply belongs to the oldest request sent to the actor it
+   *   comes `from` that is still waiting for its direct reply.
+   * - A reply whose `from` matches no pending request falls back to the oldest
+   *   such request, the behaviour before per-actor matching, so a reply from
+   *   an actor that answers under another name is not dropped.
+   */
+  private findPendingFor(message: RDPResponse): [string, PendingRequest] | undefined {
+    if (message.type === "evaluationResult" && "resultID" in message) {
+      const resultID = String(message.resultID);
+      for (const entry of this.pendingRequests) {
+        if (entry[1].resultID === resultID) return entry;
+      }
+      return undefined;
+    }
+
+    let oldestAwaitingReply: [string, PendingRequest] | undefined;
+    for (const entry of this.pendingRequests) {
+      if (entry[1].resultID !== undefined) continue; // acknowledged; waits for evaluationResult
+      if (entry[1].to === message.from) return entry;
+      oldestAwaitingReply ??= entry;
+    }
+    return oldestAwaitingReply;
   }
 
   /**

@@ -27,6 +27,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { createClient, RDPClient } from "./rdp/index.js";
 import { loadConfig, type Config } from "./utils/config.js";
+import { portContext, portPolicy, resolvePort, withPortArgument, type PortPolicy } from "./utils/targets.js";
 
 // Tool handlers - imported from tools directory
 import {
@@ -121,26 +122,32 @@ const server = new Server(
   }
 );
 
-// Shared state
-let rdpClient: RDPClient | null = null;
+// Shared state: one RDP client per Zotero instance (bridge port).
+const rdpClients = new Map<number, RDPClient>();
 let config: Config;
+let policy: PortPolicy;
 
 /**
- * Get or create the RDP client
+ * Get or create the RDP client for the Zotero instance of the call in
+ * progress: the call's `port` argument (see utils/targets.ts), else
+ * ZOTERO_RDP_PORT.
  */
 export async function getRdpClient(): Promise<RDPClient> {
-  if (!rdpClient) {
-    rdpClient = createClient({
+  const port = portContext.getStore() ?? config.rdp.port;
+  let client = rdpClients.get(port);
+  if (!client) {
+    client = createClient({
       host: config.rdp.host,
-      port: config.rdp.port,
+      port,
     });
+    rdpClients.set(port, client);
   }
 
-  if (!rdpClient.isConnected()) {
-    await rdpClient.connect();
+  if (!client.isConnected()) {
+    await client.connect();
   }
 
-  return rdpClient;
+  return client;
 }
 
 /**
@@ -183,9 +190,17 @@ const allTools: Tool[] = [
   dbStatsTool,
 ];
 
+/** Tools that never talk to Zotero: no `port` argument. */
+const LOCAL_TOOLS = new Set([
+  "zotero_scaffold_build",
+  "zotero_scaffold_serve",
+  "zotero_scaffold_lint",
+  "zotero_scaffold_typecheck",
+]);
+
 // Register tool listing handler
 server.setRequestHandler(ListToolsRequestSchema, async () => {
-  return { tools: allTools };
+  return { tools: withPortArgument(allTools, policy, LOCAL_TOOLS) };
 });
 
 // Register prompt listing handler
@@ -204,113 +219,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args = {} } = request.params;
 
   try {
-    let content: (TextContent | ImageContent)[];
-
-    switch (name) {
-      // Core tools
-      case "zotero_ping":
-        content = await handlePing(config.rdp.port);
-        break;
-      case "zotero_execute_js":
-        content = await handleExecuteJs(args as Record<string, unknown>);
-        break;
-      case "zotero_get_pref":
-        content = await handleGetPref(args as Record<string, unknown>);
-        break;
-      case "zotero_set_pref":
-        content = await handleSetPref(args as Record<string, unknown>);
-        break;
-      case "zotero_search_prefs":
-        content = await handleSearchPrefs(args as Record<string, unknown>);
-        break;
-      case "zotero_inspect_object":
-        content = await handleInspectObject(args as Record<string, unknown>);
-        break;
-      case "zotero_open_preferences":
-        content = await handleOpenPreferences(args as Record<string, unknown>);
-        break;
-
-      // Screenshot
-      case "zotero_screenshot":
-        content = await handleScreenshot(args as Record<string, unknown>);
-        break;
-
-      // Inspection tools
-      case "zotero_inspect_element":
-        content = await handleInspectElement(args as Record<string, unknown>);
-        break;
-      case "zotero_get_dom_tree":
-        content = await handleGetDomTree(args as Record<string, unknown>);
-        break;
-      case "zotero_get_styles":
-        content = await handleGetStyles(args as Record<string, unknown>);
-        break;
-      case "zotero_list_windows":
-        content = await handleListWindows();
-        break;
-
-      // Interaction tools
-      case "zotero_click_element":
-        content = await handleClickElement(args as Record<string, unknown>);
-        break;
-      case "zotero_send_keys":
-        content = await handleSendKeys(args as Record<string, unknown>);
-        break;
-
-      // Logging tools
-      case "zotero_read_logs":
-        content = await handleReadLogs(args as Record<string, unknown>);
-        break;
-      case "zotero_read_errors":
-        content = await handleReadErrors(args as Record<string, unknown>);
-        break;
-      case "zotero_clear_logs":
-        content = await handleClearLogs();
-        break;
-      case "zotero_watch_logs":
-        content = await handleWatchLogs(args as Record<string, unknown>);
-        break;
-
-      // Scaffold tools
-      case "zotero_scaffold_build":
-        content = await handleScaffoldBuild(args as Record<string, unknown>);
-        break;
-      case "zotero_scaffold_serve":
-        content = await handleScaffoldServe(args as Record<string, unknown>);
-        break;
-      case "zotero_scaffold_lint":
-        content = await handleScaffoldLint(args as Record<string, unknown>);
-        break;
-      case "zotero_scaffold_typecheck":
-        content = await handleScaffoldTypecheck(args as Record<string, unknown>);
-        break;
-
-      // Plugin tools
-      case "zotero_plugin_reload":
-        content = await handlePluginReload(args as Record<string, unknown>);
-        break;
-      case "zotero_plugin_list":
-        content = await handlePluginList();
-        break;
-      case "zotero_plugin_install":
-        content = await handlePluginInstall(args as Record<string, unknown>);
-        break;
-
-      // Database tools
-      case "zotero_db_query":
-        content = await handleDbQuery(args as Record<string, unknown>);
-        break;
-      case "zotero_db_schema":
-        content = await handleDbSchema(args as Record<string, unknown>);
-        break;
-      case "zotero_db_stats":
-        content = await handleDbStats();
-        break;
-
-      default:
-        throw new Error(`Unknown tool: ${name}`);
-    }
-
+    // The Zotero instance this call is for; getRdpClient() reads it back.
+    const port = resolvePort((args as Record<string, unknown>).port, policy);
+    const content = await portContext.run(port, () => callTool(name, args, port));
     return { content };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -321,13 +232,133 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 });
 
+async function callTool(
+  name: string,
+  args: Record<string, unknown>,
+  port: number
+): Promise<(TextContent | ImageContent)[]> {
+  let content: (TextContent | ImageContent)[];
+
+  switch (name) {
+    // Core tools
+    case "zotero_ping":
+      content = await handlePing(port);
+      break;
+    case "zotero_execute_js":
+      content = await handleExecuteJs(args as Record<string, unknown>);
+      break;
+    case "zotero_get_pref":
+      content = await handleGetPref(args as Record<string, unknown>);
+      break;
+    case "zotero_set_pref":
+      content = await handleSetPref(args as Record<string, unknown>);
+      break;
+    case "zotero_search_prefs":
+      content = await handleSearchPrefs(args as Record<string, unknown>);
+      break;
+    case "zotero_inspect_object":
+      content = await handleInspectObject(args as Record<string, unknown>);
+      break;
+    case "zotero_open_preferences":
+      content = await handleOpenPreferences(args as Record<string, unknown>);
+      break;
+
+    // Screenshot
+    case "zotero_screenshot":
+      content = await handleScreenshot(args as Record<string, unknown>);
+      break;
+
+    // Inspection tools
+    case "zotero_inspect_element":
+      content = await handleInspectElement(args as Record<string, unknown>);
+      break;
+    case "zotero_get_dom_tree":
+      content = await handleGetDomTree(args as Record<string, unknown>);
+      break;
+    case "zotero_get_styles":
+      content = await handleGetStyles(args as Record<string, unknown>);
+      break;
+    case "zotero_list_windows":
+      content = await handleListWindows();
+      break;
+
+    // Interaction tools
+    case "zotero_click_element":
+      content = await handleClickElement(args as Record<string, unknown>);
+      break;
+    case "zotero_send_keys":
+      content = await handleSendKeys(args as Record<string, unknown>);
+      break;
+
+    // Logging tools
+    case "zotero_read_logs":
+      content = await handleReadLogs(args as Record<string, unknown>);
+      break;
+    case "zotero_read_errors":
+      content = await handleReadErrors(args as Record<string, unknown>);
+      break;
+    case "zotero_clear_logs":
+      content = await handleClearLogs();
+      break;
+    case "zotero_watch_logs":
+      content = await handleWatchLogs(args as Record<string, unknown>);
+      break;
+
+    // Scaffold tools
+    case "zotero_scaffold_build":
+      content = await handleScaffoldBuild(args as Record<string, unknown>);
+      break;
+    case "zotero_scaffold_serve":
+      content = await handleScaffoldServe(args as Record<string, unknown>);
+      break;
+    case "zotero_scaffold_lint":
+      content = await handleScaffoldLint(args as Record<string, unknown>);
+      break;
+    case "zotero_scaffold_typecheck":
+      content = await handleScaffoldTypecheck(args as Record<string, unknown>);
+      break;
+
+    // Plugin tools
+    case "zotero_plugin_reload":
+      content = await handlePluginReload(args as Record<string, unknown>);
+      break;
+    case "zotero_plugin_list":
+      content = await handlePluginList();
+      break;
+    case "zotero_plugin_install":
+      content = await handlePluginInstall(args as Record<string, unknown>);
+      break;
+
+    // Database tools
+    case "zotero_db_query":
+      content = await handleDbQuery(args as Record<string, unknown>);
+      break;
+    case "zotero_db_schema":
+      content = await handleDbSchema(args as Record<string, unknown>);
+      break;
+    case "zotero_db_stats":
+      content = await handleDbStats();
+      break;
+
+    default:
+      throw new Error(`Unknown tool: ${name}`);
+  }
+
+  return content;
+}
+
 // Main entry point
 async function main() {
   // Load configuration
   config = loadConfig();
 
+  policy = portPolicy(process.env.ZOTERO_RDP_PORTS, config.rdp.port);
+
   console.error(`MCP Server Zotero Dev starting...`);
   console.error(`RDP target: ${config.rdp.host}:${config.rdp.port}`);
+  if (policy.allowed.length) {
+    console.error(`Other instances by "port" argument: ${policy.allowed.join(", ")}`);
+  }
 
   if (config.zotero.dataDir) {
     console.error(`Zotero data: ${config.zotero.dataDir}`);
@@ -342,16 +373,12 @@ async function main() {
 
 // Handle shutdown
 process.on("SIGINT", () => {
-  if (rdpClient) {
-    rdpClient.disconnect();
-  }
+  for (const client of rdpClients.values()) client.disconnect();
   process.exit(0);
 });
 
 process.on("SIGTERM", () => {
-  if (rdpClient) {
-    rdpClient.disconnect();
-  }
+  for (const client of rdpClients.values()) client.disconnect();
   process.exit(0);
 });
 

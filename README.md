@@ -221,6 +221,18 @@ That's it! No special launch flags, no configuration. 🎉
 
 </details>
 
+<details>
+<summary><strong>Session Lock</strong> — Take turns when several sessions share one Zotero (opt-in)</summary>
+
+| Tool | Description |
+|------|-------------|
+| `zotero_acquire` | Take the Zotero lock for a whole test pass; waits for the current holder if needed |
+| `zotero_release` | Give the lock back at the end of the pass |
+
+> Listed only when the server runs with `ZOTERO_MCP_LOCK=1`, so they are not counted above. See [Sharing one Zotero between sessions](#-sharing-one-zotero-between-sessions).
+
+</details>
+
 ---
 
 ## 🏗️ Architecture
@@ -276,6 +288,8 @@ That's it! No special launch flags, no configuration. 🎉
 | `ZOTERO_RDP_HOST` | Debugging host | `127.0.0.1` |
 | `ZOTERO_DATA_DIR` | Path to Zotero data directory | Auto-detect |
 | `ZOTERO_PROFILE_PATH` | Path to Zotero profile | Auto-detect |
+| `ZOTERO_MCP_LOCK` | `1` turns on the [session lock](#-sharing-one-zotero-between-sessions) | Off |
+| `ZOTERO_MCP_LOCK_LABEL` | Name the other sessions see while this one holds the lock | None |
 
 ---
 
@@ -350,6 +364,39 @@ What to read from it:
 - **No new lines at all** — the plugin never started: disabled by preference, or not installed in the profile you are actually running.
 
 `log()` output goes to `dump()` (lost unless Zotero was started from a console) and `Zotero.debug()` (a no-op unless debug output is enabled), so this file is the only durable record of a boot-time failure. A healthy session adds three lines (startup, open, shutdown); an outage adds two more, and a run of flaps two more, whatever their length. No failure mode writes per tick.
+
+---
+
+## 🔒 Sharing one Zotero between sessions
+
+Two AI sessions with this server configured against the same Zotero do not know about each other. If session B runs `zotero_plugin_install` between session A's install and A's checks, A goes on testing B's build, and nothing fails. Set `ZOTERO_MCP_LOCK=1` in the server config of every session that shares the Zotero, and they take turns:
+
+```json
+"env": {
+  "ZOTERO_MCP_LOCK": "1",
+  "ZOTERO_MCP_LOCK_LABEL": "session A"
+}
+```
+
+- **`zotero_acquire`** takes the lock for a whole test pass (install, checks, logs); **`zotero_release`** gives it back. Only the holder can release it.
+- While one session holds the lock, every tool that talks to Zotero fails at once in the other lock-enabled sessions, saying who holds the lock, since when, and when it expires. Not gated: `zotero_ping` and the four `zotero_scaffold_*` tools, which work on the project directory, so the other session can keep building.
+- `zotero_acquire` waits for its turn: `waitSeconds`, default 30, at most 50, because many MCP clients give up on a tool call after about 60 seconds. If the lock is still taken by then, it says who holds it since when; call it again to keep waiting.
+- The lock expires by itself `leaseSeconds` (default 300) after the holder's last Zotero tool call, so a session that crashed does not block the others for long. Every Zotero tool call from the holder pushes the expiry back; the scaffold tools do not, so acquire with a longer `leaseSeconds` when a build takes longer than that.
+- Without `ZOTERO_MCP_LOCK=1`, nothing changes: the two tools are not even listed.
+
+**The lock is advisory.** It binds only the sessions that set `ZOTERO_MCP_LOCK=1`. A server without it neither checks nor respects the lock, so turn it on in every session that shares the Zotero.
+
+**Where it lives.** Inside Zotero, as a property of the `Zotero` object, so no bridge plugin update is needed. Restarting Zotero clears it; restarting the MCP server or the bridge plugin does not. Expiry is measured with Zotero's clock. Each server process is its own holder (process id plus a random part), so a restarted server does not inherit the lock its previous process held: the lock stays until it expires or someone clears it.
+
+**Clearing it by hand.** In Zotero, open **Tools → Developer → Run JavaScript** and run:
+
+```js
+delete Zotero._mcpServerLock
+```
+
+Run `Zotero._mcpServerLock` instead to see the current holder: a JSON string with its label, process id, and `since`/`expires` as Zotero timestamps (milliseconds).
+
+**Limits.** There is no queue: when several sessions wait, whichever asks first after the release gets the lock. A tool call that passed the check before another session took the lock still runs to the end.
 
 ---
 

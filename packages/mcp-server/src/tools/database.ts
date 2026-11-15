@@ -449,9 +449,11 @@ export async function handleDbStats(): Promise<TextContent[]> {
           type: lib.libraryType
         }));
 
-        return stats;
+        // JSON-encode: RDP previews are one level deep, so a raw return
+        // turned the nested libraries array into the string "[Array]" (#23).
+        return JSON.stringify(stats);
       } catch (error) {
-        return { error: error.message };
+        return JSON.stringify({ error: error.message });
       }
     })()
   `;
@@ -468,7 +470,11 @@ export async function handleDbStats(): Promise<TextContent[]> {
     throw new Error("Failed to get stats: received undefined result from Zotero");
   }
 
-  const stats = statsValue as {
+  // Payload is JSON-encoded in the eval (see above) - decode it here.
+  const decoded: unknown =
+    typeof statsValue === "string" ? JSON.parse(statsValue) : statsValue;
+
+  const stats = decoded as {
     items?: number;
     attachments?: number;
     collections?: number;

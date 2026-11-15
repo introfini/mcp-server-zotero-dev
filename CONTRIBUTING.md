@@ -43,18 +43,20 @@ Please say in the PR description which of these you ran and against which Zotero
 
 ## Tests
 
-Tests live in `packages/mcp-server/tests/`, flat, one file per tool group.
+Tests live in `packages/mcp-server/tests/`, flat, one file per tool or per part of the RDP client.
 
 ```
 packages/mcp-server/tests/
-└── db-tools.test.mts       # zotero_db_query / zotero_db_schema, against a live Zotero
+├── ping.test.mts           # zotero_ping: reply shapes from a fake client, plus a live round trip
+├── concurrency.test.mts    # RDP client: parallel calls against a live Zotero, handshake against a scripted server
+└── db-stats.test.mts       # zotero_db_stats over MCP stdio against a live Zotero (rebuilds dist/ first)
 ```
 
 Four things generalise to any new test file:
 
 **Use `.mts`, not `.ts`.** `packages/mcp-server/package.json` has no `"type": "module"` and the build emits CommonJS, so vitest transforms a `.test.ts` as CJS and any top-level `await` fails to compile. The `.mts` extension forces ESM for that file.
 
-**Prefer integration tests where the bug lives in the runtime.** Several defects in this codebase only exist against a real Zotero, and a mocked RDP layer passes happily on broken code. The clearest example is [#20](https://github.com/introfini/mcp-server-zotero-dev/issues/20): Zotero wraps DB rows in a `Proxy` with no `ownKeys` trap, and nested values degrade during RDP grip resolution. Neither is reproducible against a mock. When you mock, say in a comment why the mock is sufficient.
+**Prefer integration tests where the bug lives in the runtime.** Several defects in this codebase only exist against a real Zotero, and a mocked RDP layer passes happily on broken code. The clearest example is [#20](https://github.com/introfini/mcp-server-zotero-dev/issues/20): Zotero wraps DB rows in a `Proxy` with no `ownKeys` trap, and nested values degrade during RDP grip resolution. Neither is reproducible against a mock. When you mock, say in a comment why the mock is sufficient: `concurrency.test.mts` drives the connection handshake against a scripted RDP server because what it checks is the client's own state, and only a scripted server can hold the intro packet back for a fixed time.
 
 **Skip, do not fail, when Zotero is absent.** Guard the suite with `describe.skipIf` so `npm test` stays green on a machine without Zotero. Probe the `Zotero` global itself, with `evaluateJSAsync("typeof Zotero")`, rather than checking that port 6100 accepts a TCP connection: a Zotero running with no window open keeps the port listening while every tool fails with `Zotero is not defined`.
 
